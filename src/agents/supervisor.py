@@ -6,6 +6,10 @@ Supports multiple LLM backends (all free):
 3. DeepSeek R1/V3 (FALLBACK - 10M free tokens, excellent reasoning)
 4. Anthropic Claude (OPTIONAL - paid, best quality)
 
+All providers support tool calling — the LLM decides when to call
+deterministic engine functions (EMI, tax, FIRE, SWP, etc.) and
+explains the real results to the user.
+
 Set your preferred provider via LLM_PROVIDER env var:
   "gemini" (default), "groq", "deepseek", "anthropic"
 """
@@ -26,6 +30,15 @@ from src.agents.prompts import (
     LIFE_EVENT_AGENT_PROMPT,
     GENERAL_AGENT_PROMPT,
 )
+from src.tools.registry import (
+    get_tools_for_agent,
+    tools_to_openai_format,
+    tools_to_gemini_format,
+    tools_to_anthropic_format,
+)
+from src.tools.executor import execute_tool
+
+MAX_TOOL_ITERATIONS = 3  # Prevent infinite tool-calling loops
 
 
 @dataclass
@@ -76,6 +89,11 @@ INTENT_KEYWORDS = {
         "baby", "pregnant", "house purchase", "buy house", "buy car",
         "early retire", "start business", "career break", "bonus",
     ],
+    "general_agent": [
+        "emi", "loan", "prepay", "prepayment", "installment",
+        "borrow", "lending", "repay", "home loan", "car loan",
+        "personal loan", "interest rate",
+    ],
 }
 
 AGENT_PROMPTS = {
@@ -105,10 +123,15 @@ def classify_intent(user_message: str) -> str:
 
 
 # =========================================================================
-# LLM Provider Implementations (all free-tier capable)
+# LLM Provider Implementations (all with tool calling support)
 # =========================================================================
 
-async def _call_gemini(messages: list[dict], system_prompt: str) -> str:
+async def _call_gemini(
+    messages: list[dict],
+    system_prompt: str,
+    tools: Optional[list[dict]] = None,
+    user_profile=None,
+) -> str:
     """Google Gemini 2.5 Flash - FREE, no credit card required.
 
     Free tier: 250 RPD, 250K TPM, 1M context window.
@@ -122,10 +145,17 @@ async def _call_gemini(messages: list[dict], system_prompt: str) -> str:
             return _no_key_response("GEMINI_API_KEY", "https://aistudio.google.com/apikey")
 
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
-            system_instruction=system_prompt,
-        )
+
+        # Build model with optional tools
+        model_kwargs = {
+            "model_name": "gemini-2.5-flash",
+            "system_instruction": system_prompt,
+        }
+        if tools:
+            gemini_decls = tools_to_gemini_format(tools)
+            model_kwargs["tools"] = [{"function_declarations": gemini_decls}]
+
+        model = genai.GenerativeModel(**model_kwargs)
 
         # Convert messages to Gemini format
         gemini_history = []
@@ -136,6 +166,39 @@ async def _call_gemini(messages: list[dict], system_prompt: str) -> str:
         chat = model.start_chat(history=gemini_history)
         last_msg = messages[-1]["content"] if messages else ""
         response = chat.send_message(last_msg)
+
+        # Tool-calling loop
+        if tools:
+            for _ in range(MAX_TOOL_ITERATIONS):
+                fn_call = None
+                for part in response.parts:
+                    if part.function_call.name:
+                        fn_call = part.function_call
+                        break
+
+                if not fn_call:
+                    break  # No function call, we have the final text
+
+                # Execute the tool
+                args = dict(fn_call.args) if fn_call.args else {}
+                result_json = execute_tool(fn_call.name, args, user_profile)
+
+                # Parse result for Gemini (needs a dict, not a string)
+                try:
+                    result_dict = json.loads(result_json)
+                except json.JSONDecodeError:
+                    result_dict = {"result": result_json}
+
+                # Send function response back to model
+                response = chat.send_message(
+                    genai.protos.Part(
+                        function_response=genai.protos.FunctionResponse(
+                            name=fn_call.name,
+                            response={"result": result_dict},
+                        )
+                    )
+                )
+
         return response.text
 
     except ImportError:
@@ -148,7 +211,12 @@ async def _call_gemini(messages: list[dict], system_prompt: str) -> str:
         return f"Gemini error: {str(e)}"
 
 
-async def _call_groq(messages: list[dict], system_prompt: str) -> str:
+async def _call_groq(
+    messages: list[dict],
+    system_prompt: str,
+    tools: Optional[list[dict]] = None,
+    user_profile=None,
+) -> str:
     """Groq + Llama 3.3 70B - FREE, no credit card, 750+ tok/sec.
 
     Free tier: 30 RPM, 1000 RPD on 70B models.
@@ -166,13 +234,56 @@ async def _call_groq(messages: list[dict], system_prompt: str) -> str:
         groq_messages = [{"role": "system", "content": system_prompt}]
         groq_messages.extend(messages)
 
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=groq_messages,
-            max_tokens=2048,
-            temperature=0.7,
-        )
-        return response.choices[0].message.content
+        # Build request kwargs
+        req_kwargs = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": groq_messages,
+            "max_tokens": 2048,
+            "temperature": 0.7,
+        }
+        if tools:
+            req_kwargs["tools"] = tools_to_openai_format(tools)
+
+        response = client.chat.completions.create(**req_kwargs)
+
+        # Tool-calling loop
+        if tools:
+            for _ in range(MAX_TOOL_ITERATIONS):
+                choice = response.choices[0]
+                if not choice.message.tool_calls:
+                    break
+
+                # Append assistant message with tool calls
+                groq_messages.append({
+                    "role": "assistant",
+                    "content": choice.message.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in choice.message.tool_calls
+                    ],
+                })
+
+                # Execute each tool and add results
+                for tc in choice.message.tool_calls:
+                    args = json.loads(tc.function.arguments)
+                    result = execute_tool(tc.function.name, args, user_profile)
+                    groq_messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    })
+
+                # Call again with updated messages
+                response = client.chat.completions.create(**req_kwargs)
+
+        return response.choices[0].message.content or ""
 
     except ImportError:
         return (
@@ -184,7 +295,12 @@ async def _call_groq(messages: list[dict], system_prompt: str) -> str:
         return f"Groq error: {str(e)}"
 
 
-async def _call_deepseek(messages: list[dict], system_prompt: str) -> str:
+async def _call_deepseek(
+    messages: list[dict],
+    system_prompt: str,
+    tools: Optional[list[dict]] = None,
+    user_profile=None,
+) -> str:
     """DeepSeek R1/V3 - 10M free tokens, excellent math/reasoning.
 
     API is OpenAI-compatible. Very cheap after free tokens.
@@ -205,13 +321,56 @@ async def _call_deepseek(messages: list[dict], system_prompt: str) -> str:
         ds_messages = [{"role": "system", "content": system_prompt}]
         ds_messages.extend(messages)
 
-        response = client.chat.completions.create(
-            model="deepseek-chat",  # V3 - general chat
-            messages=ds_messages,
-            max_tokens=2048,
-            temperature=0.7,
-        )
-        return response.choices[0].message.content
+        # Build request kwargs
+        req_kwargs = {
+            "model": "deepseek-chat",  # V3 - general chat
+            "messages": ds_messages,
+            "max_tokens": 2048,
+            "temperature": 0.7,
+        }
+        if tools:
+            req_kwargs["tools"] = tools_to_openai_format(tools)
+
+        response = client.chat.completions.create(**req_kwargs)
+
+        # Tool-calling loop
+        if tools:
+            for _ in range(MAX_TOOL_ITERATIONS):
+                choice = response.choices[0]
+                if not choice.message.tool_calls:
+                    break
+
+                # Append assistant message with tool calls
+                ds_messages.append({
+                    "role": "assistant",
+                    "content": choice.message.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in choice.message.tool_calls
+                    ],
+                })
+
+                # Execute each tool and add results
+                for tc in choice.message.tool_calls:
+                    args = json.loads(tc.function.arguments)
+                    result = execute_tool(tc.function.name, args, user_profile)
+                    ds_messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    })
+
+                # Call again with updated messages
+                response = client.chat.completions.create(**req_kwargs)
+
+        return response.choices[0].message.content or ""
 
     except ImportError:
         return (
@@ -223,7 +382,12 @@ async def _call_deepseek(messages: list[dict], system_prompt: str) -> str:
         return f"DeepSeek error: {str(e)}"
 
 
-async def _call_anthropic(messages: list[dict], system_prompt: str) -> str:
+async def _call_anthropic(
+    messages: list[dict],
+    system_prompt: str,
+    tools: Optional[list[dict]] = None,
+    user_profile=None,
+) -> str:
     """Anthropic Claude - paid, best quality.
 
     Get key at: https://console.anthropic.com
@@ -236,13 +400,67 @@ async def _call_anthropic(messages: list[dict], system_prompt: str) -> str:
             return _no_key_response("ANTHROPIC_API_KEY", "https://console.anthropic.com")
 
         client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=2048,
-            system=system_prompt,
-            messages=messages,
-        )
-        return response.content[0].text
+
+        # Build request kwargs
+        req_kwargs = {
+            "model": "claude-sonnet-4-5-20250929",
+            "max_tokens": 2048,
+            "system": system_prompt,
+            "messages": list(messages),  # Copy so we can modify
+        }
+        if tools:
+            req_kwargs["tools"] = tools_to_anthropic_format(tools)
+
+        response = client.messages.create(**req_kwargs)
+
+        # Tool-calling loop
+        if tools:
+            for _ in range(MAX_TOOL_ITERATIONS):
+                if response.stop_reason != "tool_use":
+                    break
+
+                # Build assistant content blocks
+                assistant_content = []
+                tool_results = []
+                for block in response.content:
+                    if block.type == "text":
+                        assistant_content.append({
+                            "type": "text",
+                            "text": block.text,
+                        })
+                    elif block.type == "tool_use":
+                        assistant_content.append({
+                            "type": "tool_use",
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input,
+                        })
+                        result = execute_tool(block.name, block.input, user_profile)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result,
+                        })
+
+                # Add assistant message and tool results to conversation
+                req_kwargs["messages"].append({
+                    "role": "assistant",
+                    "content": assistant_content,
+                })
+                req_kwargs["messages"].append({
+                    "role": "user",
+                    "content": tool_results,
+                })
+
+                # Call again with updated messages
+                response = client.messages.create(**req_kwargs)
+
+        # Extract final text from response
+        text_parts = [
+            block.text for block in response.content
+            if block.type == "text"
+        ]
+        return "\n".join(text_parts) if text_parts else ""
 
     except ImportError:
         return (
@@ -296,8 +514,10 @@ async def get_llm_response(
     messages: list[dict],
     system_prompt: str,
     provider: Optional[str] = None,
+    tools: Optional[list[dict]] = None,
+    user_profile=None,
 ) -> str:
-    """Get response from configured LLM provider.
+    """Get response from configured LLM provider with tool calling.
 
     Priority:
     1. Explicit provider parameter
@@ -311,7 +531,9 @@ async def get_llm_response(
 
     # If explicit provider set, use it directly
     if provider and provider in LLM_PROVIDERS:
-        return await LLM_PROVIDERS[provider](messages, system_prompt)
+        return await LLM_PROVIDERS[provider](
+            messages, system_prompt, tools=tools, user_profile=user_profile,
+        )
 
     # Auto-detect: try providers based on which keys are available
     key_to_provider = {
@@ -323,7 +545,9 @@ async def get_llm_response(
 
     for key_name, prov in key_to_provider.items():
         if os.environ.get(key_name):
-            return await LLM_PROVIDERS[prov](messages, system_prompt)
+            return await LLM_PROVIDERS[prov](
+                messages, system_prompt, tools=tools, user_profile=user_profile,
+            )
 
     # No keys found at all
     return _fallback_response(messages)
@@ -336,10 +560,19 @@ class MoneyMentorSupervisor:
         self.state = ConversationState()
         self.engine_results: dict = {}
         self.provider = provider  # Override LLM provider
+        self._user_profile_object = None  # IndividualProfile for tool execution
 
     def set_user_profile(self, profile_dict: dict):
         """Set user profile data for context."""
         self.state.user_profile = profile_dict
+
+    def set_user_profile_object(self, profile):
+        """Set IndividualProfile object for tool execution.
+
+        Profile-dependent tools (compare_tax_regimes, compute_health_score)
+        need the actual IndividualProfile dataclass, not a dict.
+        """
+        self._user_profile_object = profile
 
     def set_portfolio_data(self, portfolio_dict: dict):
         """Set portfolio data for context."""
@@ -355,7 +588,7 @@ class MoneyMentorSupervisor:
         1. Classify intent
         2. Route to appropriate agent
         3. Inject engine results as context
-        4. Get LLM response
+        4. Get LLM response with tool calling
         5. Return response
         """
         self.state.add_message("user", user_message)
@@ -385,11 +618,16 @@ class MoneyMentorSupervisor:
 
         full_system_prompt = "\n".join(context_parts)
 
-        # Get response from configured LLM
+        # Get tools for this agent
+        agent_tools = get_tools_for_agent(agent)
+
+        # Get response from configured LLM with tools
         response = await get_llm_response(
             messages=self.state.get_history(),
             system_prompt=full_system_prompt,
             provider=self.provider,
+            tools=agent_tools,
+            user_profile=self._user_profile_object,
         )
 
         self.state.add_message("assistant", response)
@@ -403,3 +641,4 @@ class MoneyMentorSupervisor:
         """Reset conversation state."""
         self.state = ConversationState()
         self.engine_results = {}
+        self._user_profile_object = None
