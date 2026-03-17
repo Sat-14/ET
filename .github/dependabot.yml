@@ -1,0 +1,57 @@
+version: 2
+updates:
+  # Python dependencies (requirements.txt)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"
+    # Group minor/patch updates into a single PR to reduce noise
+    groups:
+      llm-providers:
+        patterns:
+          - "google-generativeai"
+          - "groq"
+          - "openai"
+          - "anthropic"
+      financial-engines:
+        patterns:
+          - "pyxirr"
+          - "mftool"
+          - "casparser"
+      web-framework:
+        patterns:
+          - "fastapi"
+          - "uvicorn"
+          - "pydantic"
+      data-viz:
+        patterns:
+          - "streamlit"
+          - "plotly"
+      pdf-parsing:
+        patterns:
+          - "pdfplumber"
+          - "PyMuPDF"
+      storage:
+        patterns:
+          - "redis"
+          - "sqlalchemy"
+          - "aiosqlite"
+      testing:
+        patterns:
+          - "pytest"
+          - "pytest-asyncio"
+
+  # GitHub Actions (if you add CI later)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "ci"
