@@ -6,18 +6,23 @@ Provides REST API endpoints for:
 - Portfolio analysis (XIRR, overlap, behavioral)
 - Goal planning and FIRE calculation
 - Life-event simulation
+- EMI & loan optimizer
+- Insurance needs calculator
+- SWP & retirement planning
+- PDF report generation
 - AI chat interface
 - WhatsApp webhook
+- Demo data for instant showcase
 """
 
 from __future__ import annotations
 
 import os
-from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from src.models.user import (
@@ -59,6 +64,36 @@ from src.engines.behavioral_detector import (
     generate_behavioral_summary,
 )
 from src.engines.cashflow_projector import compare_scenarios
+from src.engines.emi_calculator import (
+    calculate_emi,
+    generate_amortization_schedule,
+    analyze_prepayment,
+    prepay_vs_invest,
+    compare_loan_offers,
+)
+from src.engines.insurance_calculator import (
+    calculate_life_insurance_need,
+    calculate_health_insurance_need,
+)
+from src.engines.swp_calculator import (
+    calculate_swp,
+    calculate_safe_withdrawal,
+    calculate_required_corpus,
+    create_bucket_strategy,
+)
+from src.engines.report_generator import (
+    generate_health_score_pdf,
+    generate_tax_comparison_pdf,
+    generate_goal_report_pdf,
+    generate_full_report_pdf,
+)
+from src.demo_data import (
+    DEMO_PROFILES,
+    get_demo_profile_young,
+    get_demo_portfolio,
+    get_demo_goals,
+    get_demo_life_events,
+)
 
 from src.agents.supervisor import MoneyMentorSupervisor
 from src.utils.language import detect_language, get_language_instruction
@@ -170,6 +205,51 @@ class FIREInput(BaseModel):
     safe_withdrawal_rate: float = 0.04
 
 
+class EMIInput(BaseModel):
+    principal: float
+    annual_rate: float
+    tenure_months: int
+
+
+class PrepaymentInput(BaseModel):
+    principal: float
+    annual_rate: float
+    tenure_months: int
+    prepayment_amount: float
+    prepayment_at_month: int = 12
+
+
+class PrepayVsInvestInput(BaseModel):
+    loan_principal: float
+    loan_rate: float
+    loan_tenure_months: int
+    lump_sum: float
+    investment_return: float = 12.0
+    remaining_loan_months: Optional[int] = None
+    tax_benefit: bool = True
+
+
+class LoanOfferInput(BaseModel):
+    bank: str
+    rate: float
+    tenure_months: int
+    processing_fee: float = 0
+
+
+class SWPInput(BaseModel):
+    corpus: float
+    monthly_withdrawal: float
+    annual_return: float = 0.08
+    inflation_rate: float = 0.06
+    adjust_for_inflation: bool = True
+
+
+class BucketStrategyInput(BaseModel):
+    total_corpus: float
+    monthly_expenses: float
+    years_in_retirement: int = 25
+
+
 # --- Helper: Convert Pydantic input to dataclass ---
 
 def _build_profile(data: ProfileInput) -> IndividualProfile:
@@ -252,12 +332,55 @@ def root():
         "name": "ET Money Mentor",
         "version": "1.0.0",
         "status": "running",
-        "endpoints": [
-            "/tax/compare", "/health-score", "/goals/plan",
-            "/fire", "/portfolio/returns", "/simulate",
-            "/chat",
-        ],
+        "features": {
+            "tax": ["/tax/compare", "/tax/old-regime", "/tax/new-regime"],
+            "health": ["/health-score"],
+            "goals": ["/goals/plan", "/fire", "/goals/allocate", "/monte-carlo"],
+            "simulation": ["/simulate"],
+            "loans": ["/emi", "/emi/prepayment", "/emi/prepay-vs-invest", "/emi/compare"],
+            "insurance": ["/insurance/life", "/insurance/health"],
+            "retirement": ["/swp", "/swp/safe-withdrawal", "/swp/required-corpus", "/swp/bucket-strategy"],
+            "reports": ["/report/health-score", "/report/tax", "/report/goals", "/report/full"],
+            "demo": ["/demo/profiles", "/demo/health-score", "/demo/tax", "/demo/goals"],
+            "chat": ["/chat"],
+        },
     }
+
+
+# --- Demo Endpoints (instant showcase, no input needed) ---
+
+@app.get("/demo/profiles")
+def demo_profiles():
+    """List available demo profiles."""
+    return {k: {"name": v["name"], "description": v["description"]} for k, v in DEMO_PROFILES.items()}
+
+
+@app.get("/demo/health-score")
+def demo_health_score(profile: str = "young_professional"):
+    """Run health score on a demo profile."""
+    if profile not in DEMO_PROFILES:
+        raise HTTPException(status_code=400, detail=f"Unknown profile: {profile}")
+    p = DEMO_PROFILES[profile]["profile"]()
+    report = compute_money_health_score(p)
+    return {"profile": DEMO_PROFILES[profile]["name"], "report": report.to_dict()}
+
+
+@app.get("/demo/tax")
+def demo_tax(profile: str = "mid_career"):
+    """Run tax comparison on a demo profile."""
+    if profile not in DEMO_PROFILES:
+        raise HTTPException(status_code=400, detail=f"Unknown profile: {profile}")
+    p = DEMO_PROFILES[profile]["profile"]()
+    comp = compare_regimes(p)
+    return {"profile": DEMO_PROFILES[profile]["name"], "comparison": comp.to_dict()}
+
+
+@app.get("/demo/goals")
+def demo_goals():
+    """Plan demo financial goals."""
+    goals = get_demo_goals()
+    plans = plan_all_goals(goals)
+    return [p.to_dict() for p in plans]
 
 
 # --- Tax Endpoints ---
@@ -396,6 +519,182 @@ def simulate_life_events(profile: ProfileInput, events: list[LifeEventInput], ye
     return result.to_dict()
 
 
+# --- EMI & Loan Endpoints ---
+
+@app.post("/emi")
+def emi_calculator(data: EMIInput):
+    """Calculate EMI for any loan."""
+    result = calculate_emi(data.principal, data.annual_rate, data.tenure_months)
+    return result.to_dict()
+
+
+@app.post("/emi/amortization")
+def emi_amortization(data: EMIInput):
+    """Generate full amortization schedule."""
+    schedule = generate_amortization_schedule(data.principal, data.annual_rate, data.tenure_months)
+    return [{"month": e.month, "emi": e.emi, "principal": e.principal,
+             "interest": e.interest, "balance": e.balance} for e in schedule]
+
+
+@app.post("/emi/prepayment")
+def emi_prepayment(data: PrepaymentInput):
+    """Analyze impact of loan prepayment."""
+    result = analyze_prepayment(
+        data.principal, data.annual_rate, data.tenure_months,
+        data.prepayment_amount, data.prepayment_at_month,
+    )
+    return result.to_dict()
+
+
+@app.post("/emi/prepay-vs-invest")
+def emi_prepay_vs_invest(data: PrepayVsInvestInput):
+    """Should you prepay loan or invest? Decision engine."""
+    result = prepay_vs_invest(
+        data.loan_principal, data.loan_rate, data.loan_tenure_months,
+        data.lump_sum, data.investment_return, data.remaining_loan_months,
+        data.tax_benefit,
+    )
+    return result.to_dict()
+
+
+@app.post("/emi/compare")
+def emi_compare_offers(loan_amount: float = Query(...), offers: list[LoanOfferInput] = []):
+    """Compare multiple loan offers side by side."""
+    offer_dicts = [
+        {"bank": o.bank, "rate": o.rate, "tenure_months": o.tenure_months,
+         "processing_fee": o.processing_fee}
+        for o in offers
+    ]
+    return compare_loan_offers(loan_amount, offer_dicts)
+
+
+# --- Insurance Endpoints ---
+
+@app.post("/insurance/life")
+def insurance_life(profile: ProfileInput):
+    """Calculate life insurance needs (HLV method)."""
+    p = _build_profile(profile)
+    result = calculate_life_insurance_need(p)
+    return result.to_dict()
+
+
+@app.post("/insurance/health")
+def insurance_health(
+    profile: ProfileInput,
+    num_family_members: int = 3,
+    city_tier: str = "metro",
+):
+    """Calculate health insurance adequacy."""
+    p = _build_profile(profile)
+    result = calculate_health_insurance_need(p, num_family_members, city_tier)
+    return result.to_dict()
+
+
+# --- SWP & Retirement Endpoints ---
+
+@app.post("/swp")
+def swp_calculator(data: SWPInput):
+    """Calculate how long a corpus lasts with monthly withdrawals."""
+    result = calculate_swp(
+        data.corpus, data.monthly_withdrawal, data.annual_return,
+        data.inflation_rate, data.adjust_for_inflation,
+    )
+    return result.to_dict()
+
+
+@app.get("/swp/safe-withdrawal")
+def swp_safe_withdrawal(
+    corpus: float = Query(...),
+    years: int = 30,
+    annual_return: float = 0.08,
+    inflation_rate: float = 0.06,
+):
+    """Calculate maximum safe monthly withdrawal for N years."""
+    monthly = calculate_safe_withdrawal(corpus, years, annual_return, inflation_rate)
+    return {"corpus": round(corpus), "years": years, "safe_monthly_withdrawal": round(monthly)}
+
+
+@app.get("/swp/required-corpus")
+def swp_required_corpus(
+    monthly_income: float = Query(...),
+    years: int = 30,
+    annual_return: float = 0.08,
+    inflation_rate: float = 0.06,
+):
+    """Calculate corpus needed for desired monthly income."""
+    corpus = calculate_required_corpus(monthly_income, years, annual_return, inflation_rate)
+    return {"monthly_income": round(monthly_income), "years": years, "required_corpus": round(corpus)}
+
+
+@app.post("/swp/bucket-strategy")
+def swp_bucket(data: BucketStrategyInput):
+    """Create 3-bucket retirement income strategy."""
+    result = create_bucket_strategy(data.total_corpus, data.monthly_expenses, data.years_in_retirement)
+    return result.to_dict()
+
+
+# --- PDF Report Endpoints ---
+
+@app.post("/report/health-score")
+def report_health_score(profile: ProfileInput):
+    """Generate downloadable health score PDF report."""
+    p = _build_profile(profile)
+    report = compute_money_health_score(p)
+    pdf_bytes = generate_health_score_pdf(report.to_dict())
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=health_score_report.pdf"},
+    )
+
+
+@app.post("/report/tax")
+def report_tax(profile: ProfileInput):
+    """Generate downloadable tax comparison PDF report."""
+    p = _build_profile(profile)
+    comp = compare_regimes(p)
+    data = comp.to_dict()
+    pdf_bytes = generate_tax_comparison_pdf(
+        data["old_regime"], data["new_regime"],
+        data["recommended_regime"], data["tax_saving"],
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=tax_comparison_report.pdf"},
+    )
+
+
+@app.post("/report/full")
+def report_full(profile: ProfileInput, goals: list[GoalInput] = []):
+    """Generate comprehensive financial report PDF."""
+    p = _build_profile(profile)
+    health = compute_money_health_score(p).to_dict()
+    tax = compare_regimes(p).to_dict()
+
+    goal_data = None
+    if goals:
+        goal_list = [
+            FinancialGoal(
+                name=g.name, goal_type=GoalType.CUSTOM, target_amount=g.target_amount,
+                target_year=g.target_year, current_corpus=g.current_corpus,
+                monthly_sip=g.monthly_sip, inflation_rate=g.inflation_rate,
+                expected_return=g.expected_return,
+                priority=GoalPriority(g.priority) if g.priority in GoalPriority.__members__.values() else GoalPriority.MEDIUM,
+            )
+            for g in goals
+        ]
+        plans = plan_all_goals(goal_list)
+        goal_data = [p.to_dict() for p in plans]
+
+    pdf_bytes = generate_full_report_pdf(p.name, health, tax, goal_data)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=financial_report.pdf"},
+    )
+
+
 # --- AI Chat ---
 
 @app.post("/chat")
@@ -410,7 +709,6 @@ async def chat(data: ChatInput):
 
     # Detect language
     lang = detect_language(data.message)
-    lang_instruction = get_language_instruction(lang)
 
     response = await supervisor.chat(data.message)
 

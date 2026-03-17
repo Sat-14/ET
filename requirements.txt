@@ -24,13 +24,23 @@ anthropic>=0.39.0
 # crewai==0.80.0
 
 # Financial Engines
-pyxirr==0.10.6
-mftool==2.8
+pyxirr==0.10.6                    # XIRR, IRR, PMT, FV, PV - Rust-powered, replaces custom math
+numpy-financial>=1.0.0            # Backup: pmt, fv, pv, npv, irr (from NumPy org)
+mftool>=3.0                       # Indian MF NAV data (AMFI)
+
+# Market Data (free, no API key)
+yfinance>=0.2.40                  # Indian stocks via .NS/.BO, Nifty data, dividends
+jugaad-data>=0.25                 # NSE/BSE historical data + RBI economic data
+
+# Portfolio Analytics
+quantstats>=0.0.62                # Sharpe, Sortino, drawdown, tear sheets, HTML reports
+PyPortfolioOpt>=1.5.5             # Mean-variance optimization, Black-Litterman, HRP
 
 # PDF & Document Parsing
-casparser==0.7.4
-pdfplumber==0.11.4
-PyMuPDF==1.24.0
+casparser==0.7.4                  # CAS PDF parsing (CAMS/KFintech)
+pdfplumber==0.11.4                # Form-16 / salary slip parsing
+PyMuPDF==1.24.0                   # PDF rendering fallback
+fpdf2>=2.7.9                      # PDF report generation (lightweight, Unicode/Hindi support)
 
 # Data & Storage
 redis==5.2.0

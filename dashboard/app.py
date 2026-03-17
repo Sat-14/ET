@@ -4,14 +4,16 @@ A comprehensive financial dashboard with:
 - AI Chat interface
 - Money Health Score visualization
 - Tax comparison (old vs new regime)
-- Goal planner
-- Portfolio X-Ray
+- Goal planner & FIRE calculator
+- EMI & Loan optimizer
+- Insurance needs analyzer
+- Retirement (SWP) planner
 - Life-event simulator
+- PDF report downloads
 """
 
 import sys
 import os
-import json
 import asyncio
 
 # Add project root to path
@@ -19,21 +21,24 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 import plotly.graph_objects as go
-import plotly.express as px
 
 from src.models.user import (
     IndividualProfile, SalaryBreakup, Deductions, InsuranceCoverage,
     Debt, MonthlyExpenses, Gender, City,
 )
 from src.models.goals import FinancialGoal, GoalType, GoalPriority, LifeEvent, LifeEventType, LIFE_EVENT_TEMPLATES
-from src.models.portfolio import Portfolio
 
 from src.engines.tax_calculator import compare_regimes
 from src.engines.health_scorer import compute_money_health_score
 from src.engines.goal_calculator import plan_all_goals, calculate_fire, monte_carlo_simulation
 from src.engines.cashflow_projector import compare_scenarios
+from src.engines.emi_calculator import calculate_emi, analyze_prepayment, prepay_vs_invest
+from src.engines.insurance_calculator import calculate_life_insurance_need, calculate_health_insurance_need
+from src.engines.swp_calculator import calculate_swp, calculate_safe_withdrawal, create_bucket_strategy
+from src.engines.report_generator import generate_health_score_pdf, generate_full_report_pdf
 from src.agents.supervisor import MoneyMentorSupervisor
-from src.utils.language import format_indian_number, detect_language
+from src.utils.language import format_indian_number
+from src.demo_data import DEMO_PROFILES, get_demo_goals
 
 
 # --- Page Config ---
@@ -45,8 +50,6 @@ st.set_page_config(
 )
 
 # --- Session State Init ---
-if "profile" not in st.session_state:
-    st.session_state.profile = None
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "supervisor" not in st.session_state:
@@ -56,6 +59,15 @@ if "supervisor" not in st.session_state:
 def build_profile_from_sidebar() -> IndividualProfile:
     """Build user profile from sidebar inputs."""
     st.sidebar.header("Your Profile")
+
+    # Demo profile quick-load
+    demo_choice = st.sidebar.selectbox(
+        "Quick Load Demo Profile",
+        ["Custom"] + list(DEMO_PROFILES.keys()),
+        format_func=lambda x: DEMO_PROFILES[x]["name"] if x in DEMO_PROFILES else "Enter Custom Values",
+    )
+    if demo_choice in DEMO_PROFILES:
+        return DEMO_PROFILES[demo_choice]["profile"]()
 
     name = st.sidebar.text_input("Name", "User")
     age = st.sidebar.number_input("Age", 18, 80, 30)
@@ -148,7 +160,7 @@ def render_health_score(profile: IndividualProfile):
         fig.update_layout(height=300)
         st.plotly_chart(fig, use_container_width=True)
 
-    # Dimension breakdown radar chart
+    # Radar chart
     categories = [d.name for d in report.dimensions]
     values = [d.pct for d in report.dimensions]
 
@@ -162,8 +174,7 @@ def render_health_score(profile: IndividualProfile):
     ))
     fig_radar.update_layout(
         polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
-        showlegend=False,
-        height=400,
+        showlegend=False, height=400,
         title="Score Breakdown by Dimension",
     )
     st.plotly_chart(fig_radar, use_container_width=True)
@@ -181,12 +192,21 @@ def render_health_score(profile: IndividualProfile):
             st.caption(dim.details)
             if dim.recommendations:
                 for rec in dim.recommendations:
-                    st.info(f"→ {rec}")
+                    st.info(f"-> {rec}")
 
     # Top actions
     st.subheader("Top 3 Actions to Improve Your Score")
     for i, action in enumerate(report.top_actions, 1):
         st.warning(f"**{i}.** {action}")
+
+    # Download PDF
+    pdf_bytes = generate_health_score_pdf(report.to_dict())
+    st.download_button(
+        "Download Health Score PDF",
+        data=pdf_bytes,
+        file_name="health_score_report.pdf",
+        mime="application/pdf",
+    )
 
 
 def render_tax_comparison(profile: IndividualProfile):
@@ -197,13 +217,11 @@ def render_tax_comparison(profile: IndividualProfile):
     old = comp.old_regime
     new = comp.new_regime
 
-    # Recommendation banner
     if comp.recommended_regime.value == "old":
         st.success(f"**Old Regime is better!** You save {format_indian_number(comp.tax_saving)}/year")
     else:
         st.success(f"**New Regime is better!** You save {format_indian_number(comp.tax_saving)}/year")
 
-    # Side by side comparison
     col1, col2 = st.columns(2)
 
     with col1:
@@ -224,7 +242,6 @@ def render_tax_comparison(profile: IndividualProfile):
         st.metric("Effective Rate", f"{new.effective_rate:.1f}%")
         st.metric("Monthly In-Hand", format_indian_number(new.monthly_in_hand))
 
-    # Bar chart comparison
     fig = go.Figure(data=[
         go.Bar(name="Old Regime", x=["Tax", "In-Hand (Monthly)"], y=[old.total_tax, old.monthly_in_hand], marker_color="#FF6B6B"),
         go.Bar(name="New Regime", x=["Tax", "In-Hand (Monthly)"], y=[new.total_tax, new.monthly_in_hand], marker_color="#4ECDC4"),
@@ -232,7 +249,6 @@ def render_tax_comparison(profile: IndividualProfile):
     fig.update_layout(barmode="group", title="Tax Comparison", height=400)
     st.plotly_chart(fig, use_container_width=True)
 
-    # Unused deduction room
     if comp.unused_deduction_room:
         st.subheader("Unused Deduction Room (Old Regime)")
         for section, amount in comp.unused_deduction_room.items():
@@ -243,36 +259,38 @@ def render_goal_planner(profile: IndividualProfile):
     """Render goal planner section."""
     st.header("Goal Planner")
 
-    # Goal input form
-    st.subheader("Add Your Financial Goals")
+    use_demo = st.checkbox("Load demo goals", value=True)
 
-    num_goals = st.number_input("Number of goals", 1, 10, 3)
-    goals = []
+    if use_demo:
+        goals = get_demo_goals()
+    else:
+        num_goals = st.number_input("Number of goals", 1, 10, 3)
+        goals = []
+        for i in range(num_goals):
+            with st.expander(f"Goal {i + 1}", expanded=(i == 0)):
+                col1, col2 = st.columns(2)
+                with col1:
+                    name = st.text_input("Goal Name", f"Goal {i + 1}", key=f"goal_name_{i}")
+                    target = st.number_input("Target Amount (today's value)", 100_000, 100_000_000, 2_000_000, step=100_000, key=f"goal_target_{i}")
+                    target_year = st.number_input("Target Year", 2026, 2060, 2035, key=f"goal_year_{i}")
+                with col2:
+                    corpus = st.number_input("Already Saved", 0, 100_000_000, 0, step=50_000, key=f"goal_corpus_{i}")
+                    sip = st.number_input("Current Monthly SIP", 0, 500_000, 0, step=1_000, key=f"goal_sip_{i}")
+                    priority = st.selectbox("Priority", ["critical", "high", "medium", "low"], index=2, key=f"goal_priority_{i}")
 
-    for i in range(num_goals):
-        with st.expander(f"Goal {i + 1}", expanded=(i == 0)):
-            col1, col2 = st.columns(2)
-            with col1:
-                name = st.text_input(f"Goal Name", f"Goal {i + 1}", key=f"goal_name_{i}")
-                target = st.number_input(f"Target Amount (today's value)", 100_000, 100_000_000, 2_000_000, step=100_000, key=f"goal_target_{i}")
-                target_year = st.number_input(f"Target Year", 2026, 2060, 2035, key=f"goal_year_{i}")
-            with col2:
-                corpus = st.number_input(f"Already Saved", 0, 100_000_000, 0, step=50_000, key=f"goal_corpus_{i}")
-                sip = st.number_input(f"Current Monthly SIP", 0, 500_000, 0, step=1_000, key=f"goal_sip_{i}")
-                priority = st.selectbox(f"Priority", ["critical", "high", "medium", "low"], index=2, key=f"goal_priority_{i}")
-
-            goals.append(FinancialGoal(
-                name=name, goal_type=GoalType.CUSTOM, target_amount=target,
-                target_year=target_year, current_corpus=corpus, monthly_sip=sip,
-                priority=GoalPriority(priority),
-            ))
+                goals.append(FinancialGoal(
+                    name=name, goal_type=GoalType.CUSTOM, target_amount=target,
+                    target_year=target_year, current_corpus=corpus, monthly_sip=sip,
+                    priority=GoalPriority(priority),
+                ))
 
     if st.button("Plan Goals", type="primary"):
         plans = plan_all_goals(goals)
 
         for plan in plans:
-            status = "🟢 On Track" if plan.on_track else "🔴 Needs Attention"
-            st.subheader(f"{plan.goal.name} {status}")
+            status = "On Track" if plan.on_track else "Needs Attention"
+            status_icon = "🟢" if plan.on_track else "🔴"
+            st.subheader(f"{plan.goal.name} {status_icon} {status}")
 
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Target (Inflation Adj)", format_indian_number(plan.inflation_adjusted_target))
@@ -280,12 +298,11 @@ def render_goal_planner(profile: IndividualProfile):
             col3.metric("Required SIP", format_indian_number(plan.required_monthly_sip) + "/mo")
             col4.metric("Progress", f"{plan.progress_pct:.0f}%")
 
-            # Progress bar
             st.progress(min(plan.progress_pct / 100, 1.0))
             st.caption(f"Suggested: {plan.suggested_asset_class}")
 
             for note in plan.notes:
-                st.info(f"→ {note}")
+                st.info(f"-> {note}")
 
 
 def render_fire_calculator():
@@ -304,12 +321,9 @@ def render_fire_calculator():
 
     if st.button("Calculate FIRE", type="primary"):
         result = calculate_fire(
-            current_age=current_age,
-            annual_expenses=annual_exp,
-            current_corpus=corpus,
-            monthly_investment=monthly_inv,
-            expected_return=exp_return,
-            inflation_rate=inflation,
+            current_age=current_age, annual_expenses=annual_exp,
+            current_corpus=corpus, monthly_investment=monthly_inv,
+            expected_return=exp_return, inflation_rate=inflation,
         )
 
         col1, col2, col3 = st.columns(3)
@@ -320,19 +334,206 @@ def render_fire_calculator():
         st.metric("Savings Rate", f"{result.current_savings_rate:.0f}%")
         st.metric("Annual Passive Income at FIRE", format_indian_number(result.annual_passive_income))
 
-        # Monte Carlo
         st.subheader("Monte Carlo Simulation (5000 scenarios)")
         mc = monte_carlo_simulation(
-            current_corpus=corpus,
-            monthly_sip=monthly_inv,
-            years=int(result.years_to_fire),
-            target_amount=result.fire_number,
+            current_corpus=corpus, monthly_sip=monthly_inv,
+            years=int(result.years_to_fire), target_amount=result.fire_number,
         )
         st.metric("Success Probability", f"{mc.success_probability:.0f}%")
         col1, col2, col3 = st.columns(3)
         col1.metric("Pessimistic (P10)", format_indian_number(mc.p10_outcome))
         col2.metric("Median", format_indian_number(mc.median_outcome))
         col3.metric("Optimistic (P90)", format_indian_number(mc.p90_outcome))
+
+
+def render_emi_calculator():
+    """Render EMI & Loan optimizer."""
+    st.header("EMI & Loan Optimizer")
+
+    tab_emi, tab_prepay, tab_compare = st.tabs(["EMI Calculator", "Prepay vs Invest", "Compare Loans"])
+
+    with tab_emi:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            principal = st.number_input("Loan Amount", 100_000, 100_000_000, 5_000_000, step=100_000)
+        with col2:
+            rate = st.number_input("Interest Rate (%)", 1.0, 25.0, 8.5, step=0.1)
+        with col3:
+            tenure_yrs = st.number_input("Tenure (years)", 1, 30, 20)
+
+        if st.button("Calculate EMI", type="primary"):
+            result = calculate_emi(principal, rate, tenure_yrs * 12)
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Monthly EMI", format_indian_number(result.monthly_emi))
+            col2.metric("Total Payment", format_indian_number(result.total_payment))
+            col3.metric("Total Interest", format_indian_number(result.total_interest))
+            col4.metric("Interest/Principal", f"{result.interest_to_principal_ratio:.2f}x")
+
+            fig = go.Figure(data=[go.Pie(
+                labels=["Principal", "Interest"],
+                values=[principal, result.total_interest],
+                marker_colors=["#4ECDC4", "#FF6B6B"],
+                hole=0.4,
+            )])
+            fig.update_layout(title="Payment Breakdown", height=350)
+            st.plotly_chart(fig, use_container_width=True)
+
+    with tab_prepay:
+        col1, col2 = st.columns(2)
+        with col1:
+            pp_principal = st.number_input("Loan Outstanding", 100_000, 100_000_000, 4_000_000, step=100_000, key="pp_p")
+            pp_rate = st.number_input("Loan Rate (%)", 1.0, 25.0, 8.5, step=0.1, key="pp_r")
+            pp_tenure = st.number_input("Remaining Tenure (months)", 12, 360, 180, key="pp_t")
+        with col2:
+            pp_amount = st.number_input("Lump Sum Available", 50_000, 50_000_000, 500_000, step=50_000)
+            inv_return = st.number_input("Expected Investment Return (%)", 5.0, 20.0, 12.0, step=0.5)
+            tax_ben = st.checkbox("Home Loan Tax Benefit (Sec 24b)?", value=True)
+
+        if st.button("Analyze", type="primary", key="prepay_btn"):
+            result = prepay_vs_invest(pp_principal, pp_rate, pp_tenure, pp_amount, inv_return, tax_benefit=tax_ben)
+
+            if result.recommendation == "invest":
+                st.success(f"**Invest the money!** Net benefit: {format_indian_number(result.net_benefit)}")
+            else:
+                st.success(f"**Prepay the loan!** Net benefit: {format_indian_number(result.net_benefit)}")
+
+            col1, col2 = st.columns(2)
+            col1.metric("Interest Saved by Prepaying", format_indian_number(result.prepay_interest_saved))
+            col2.metric("Expected Investment Return", format_indian_number(result.invest_expected_return))
+
+            st.info(result.details)
+
+    with tab_compare:
+        st.write("Compare loan offers from different banks")
+        loan_amt = st.number_input("Loan Amount", 100_000, 100_000_000, 5_000_000, step=100_000, key="cmp_amt")
+
+        offers_data = []
+        for i in range(3):
+            with st.expander(f"Offer {i+1}", expanded=(i < 2)):
+                bank = st.text_input("Bank Name", ["SBI", "HDFC", "ICICI"][i], key=f"bank_{i}")
+                o_rate = st.number_input("Rate (%)", 6.0, 15.0, [8.4, 8.75, 9.0][i], step=0.05, key=f"cmp_rate_{i}")
+                o_tenure = st.number_input("Tenure (months)", 60, 360, 240, key=f"cmp_tenure_{i}")
+                o_fee = st.number_input("Processing Fee", 0, 500_000, [10000, 15000, 12000][i], step=1_000, key=f"cmp_fee_{i}")
+                offers_data.append({"bank": bank, "rate": o_rate, "tenure_months": o_tenure, "processing_fee": o_fee})
+
+        if st.button("Compare Offers", type="primary", key="cmp_btn"):
+            from src.engines.emi_calculator import compare_loan_offers
+            results = compare_loan_offers(loan_amt, offers_data)
+            for i, r in enumerate(results):
+                medal = ["🥇", "🥈", "🥉"][i] if i < 3 else ""
+                st.subheader(f"{medal} {r['bank']}")
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Rate", f"{r['rate']}%")
+                col2.metric("Monthly EMI", format_indian_number(r['monthly_emi']))
+                col3.metric("Total Interest", format_indian_number(r['total_interest']))
+                col4.metric("Total Cost", format_indian_number(r['total_cost']))
+                if r.get("savings_vs_worst"):
+                    st.caption(f"Saves {format_indian_number(r['savings_vs_worst'])} vs worst offer")
+
+
+def render_insurance(profile: IndividualProfile):
+    """Render insurance needs analyzer."""
+    st.header("Insurance Needs Analyzer")
+
+    tab_life, tab_health = st.tabs(["Life Insurance", "Health Insurance"])
+
+    with tab_life:
+        result = calculate_life_insurance_need(profile)
+        gap_color = "inverse" if result.gap > 0 else "normal"
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Recommended Cover", format_indian_number(result.recommended_cover))
+        col2.metric("Current Cover", format_indian_number(result.current_cover))
+        col3.metric("Gap", format_indian_number(result.gap), delta_color=gap_color)
+
+        st.metric("Adequacy", f"{result.adequacy_pct:.0f}%")
+        st.progress(min(result.adequacy_pct / 100, 1.0))
+
+        st.subheader("Calculation Methods")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Human Life Value (HLV)", format_indian_number(result.hlv_method))
+        col2.metric("Expense Replacement", format_indian_number(result.expense_method))
+        col3.metric("Needs-Based", format_indian_number(result.needs_method))
+
+        if result.recommendations:
+            st.subheader("Recommendations")
+            for rec in result.recommendations:
+                st.warning(rec)
+
+    with tab_health:
+        num_family = st.number_input("Family Members", 1, 8, 3)
+        city_tier = st.selectbox("City Tier", ["metro", "non_metro"])
+
+        result = calculate_health_insurance_need(profile, num_family, city_tier)
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Recommended Cover", format_indian_number(result.recommended_cover))
+        col2.metric("Current Cover", format_indian_number(result.current_cover))
+        col3.metric("Gap", format_indian_number(result.gap))
+
+        st.metric("Adequacy", f"{result.adequacy_pct:.0f}%")
+        st.progress(min(result.adequacy_pct / 100, 1.0))
+
+        if result.needs_super_top_up:
+            st.info(f"Super Top-Up needed: {format_indian_number(result.recommended_top_up)}")
+        st.metric("Estimated Annual Premium", format_indian_number(result.estimated_premium))
+
+        if result.recommendations:
+            st.subheader("Recommendations")
+            for rec in result.recommendations:
+                st.warning(rec)
+
+
+def render_retirement_planner():
+    """Render SWP & retirement planning."""
+    st.header("Retirement Planner (SWP)")
+
+    tab_swp, tab_bucket = st.tabs(["Withdrawal Calculator", "Bucket Strategy"])
+
+    with tab_swp:
+        col1, col2 = st.columns(2)
+        with col1:
+            corpus = st.number_input("Retirement Corpus", 1_000_000, 500_000_000, 20_000_000, step=1_000_000)
+            monthly_withdrawal = st.number_input("Monthly Withdrawal", 10_000, 5_000_000, 100_000, step=10_000)
+        with col2:
+            annual_return = st.slider("Expected Return (%)", 4.0, 15.0, 8.0, 0.5) / 100
+            inflation = st.slider("Inflation (%)", 3.0, 10.0, 6.0, 0.5, key="swp_inf") / 100
+
+        if st.button("Calculate SWP", type="primary"):
+            result = calculate_swp(corpus, monthly_withdrawal, annual_return, inflation)
+
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Corpus Lasts", f"{result.years_corpus_lasts:.1f} years")
+            col2.metric("Total Withdrawn", format_indian_number(result.total_withdrawn))
+            col3.metric("Final Balance", format_indian_number(result.final_balance))
+
+            safe = calculate_safe_withdrawal(corpus, 30, annual_return, inflation)
+            st.info(f"Safe monthly withdrawal for 30 years: {format_indian_number(safe)}")
+
+            if result.years_corpus_lasts < 25:
+                st.error("Your corpus may not last 25 years! Consider reducing withdrawals.")
+            else:
+                st.success("Your corpus should sustain you for 25+ years!")
+
+    with tab_bucket:
+        col1, col2 = st.columns(2)
+        with col1:
+            b_corpus = st.number_input("Total Corpus", 1_000_000, 500_000_000, 20_000_000, step=1_000_000, key="b_corpus")
+        with col2:
+            b_expenses = st.number_input("Monthly Expenses", 10_000, 5_000_000, 80_000, step=5_000)
+
+        if st.button("Create Bucket Strategy", type="primary", key="bucket_btn"):
+            strategy = create_bucket_strategy(b_corpus, b_expenses)
+
+            st.metric("Total Years Covered", f"{strategy.years_covered:.1f} years")
+
+            for bucket_data in [strategy.short_term, strategy.medium_term, strategy.long_term]:
+                st.subheader(bucket_data.name)
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Amount", format_indian_number(bucket_data.amount))
+                col2.metric("Allocation", f"{bucket_data.pct:.1f}%")
+                col3.metric("Expected Return", f"{bucket_data.expected_return * 100:.0f}%")
+                st.caption(f"{bucket_data.duration_years} | {bucket_data.asset_type}")
 
 
 def render_life_simulator(profile: IndividualProfile):
@@ -361,14 +562,10 @@ def render_life_simulator(profile: IndividualProfile):
 
     if st.button("Simulate Impact", type="primary"):
         event = LifeEvent(
-            event_type=event_type,
-            name=template["name"],
-            year=year, month=month,
-            one_time_cost=one_time,
-            monthly_income_change=income_change,
-            monthly_expense_change=expense_change,
-            duration_months=duration,
-            new_emi=new_emi,
+            event_type=event_type, name=template["name"],
+            year=year, month=month, one_time_cost=one_time,
+            monthly_income_change=income_change, monthly_expense_change=expense_change,
+            duration_months=duration, new_emi=new_emi,
         )
 
         result = compare_scenarios(profile, [event], years=10)
@@ -394,8 +591,6 @@ def render_life_simulator(profile: IndividualProfile):
             delta_color="normal" if result.deltas["emergency_fund_stress"] >= 0 else "inverse",
         )
 
-        # Comparison table
-        st.subheader("Before vs After (10 years)")
         col1, col2 = st.columns(2)
         with col1:
             st.write("**Baseline (No Event)**")
@@ -413,12 +608,10 @@ def render_chat():
     """Render AI chat interface."""
     st.header("Chat with Money Mentor")
 
-    # Display chat history
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
-    # Chat input
     if prompt := st.chat_input("Ask anything about your finances..."):
         st.session_state.chat_history.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -435,9 +628,8 @@ def render_chat():
                 except Exception as e:
                     response = (
                         f"I couldn't connect to the AI backend ({str(e)[:100]}). "
-                        "Please make sure your ANTHROPIC_API_KEY is set.\n\n"
-                        "In the meantime, check out the other tabs for instant "
-                        "calculations (Tax, Health Score, Goals, FIRE, Simulator)!"
+                        "Please check your LLM API key in .env.\n\n"
+                        "Try the other tabs for instant calculations!"
                     )
             st.write(response)
             st.session_state.chat_history.append({"role": "assistant", "content": response})
@@ -451,32 +643,39 @@ def main():
 
     # Build profile from sidebar
     profile = build_profile_from_sidebar()
-    st.session_state.profile = profile
 
     # Tab navigation
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "Chat", "Health Score", "Tax Wizard",
-        "Goal Planner", "FIRE Calculator", "Life Simulator",
+    tabs = st.tabs([
+        "Chat", "Health Score", "Tax Wizard", "Goal Planner",
+        "FIRE Calculator", "EMI & Loans", "Insurance",
+        "Retirement (SWP)", "Life Simulator",
     ])
 
-    with tab1:
+    with tabs[0]:
         render_chat()
-    with tab2:
+    with tabs[1]:
         render_health_score(profile)
-    with tab3:
+    with tabs[2]:
         render_tax_comparison(profile)
-    with tab4:
+    with tabs[3]:
         render_goal_planner(profile)
-    with tab5:
+    with tabs[4]:
         render_fire_calculator()
-    with tab6:
+    with tabs[5]:
+        render_emi_calculator()
+    with tabs[6]:
+        render_insurance(profile)
+    with tabs[7]:
+        render_retirement_planner()
+    with tabs[8]:
         render_life_simulator(profile)
 
     # Footer
     st.divider()
     st.caption(
-        "This is for educational purposes only. Consult a SEBI-registered advisor for personalized advice. "
-        "Built with research from Fin-Ally (ArXiv 2509.24342), Chadha (2024, EEL), and Nature (2025)."
+        "For educational purposes only. Consult a SEBI-registered advisor. "
+        "Built with research from Fin-Ally (ArXiv 2509.24342), Chadha (2024, EEL), and Nature (2025). "
+        "Powered by pyxirr, mftool, casparser, fpdf2, quantstats."
     )
 
 
