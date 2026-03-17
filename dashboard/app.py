@@ -36,6 +36,10 @@ from src.engines.emi_calculator import calculate_emi, analyze_prepayment, prepay
 from src.engines.insurance_calculator import calculate_life_insurance_need, calculate_health_insurance_need
 from src.engines.swp_calculator import calculate_swp, calculate_safe_withdrawal, create_bucket_strategy
 from src.engines.report_generator import generate_health_score_pdf, generate_full_report_pdf
+from src.engines.investment_screener import (
+    search_mutual_funds, get_fund_details, suggest_asset_allocation, screen_stocks,
+    MF_CATEGORIES,
+)
 from src.agents.supervisor import MoneyMentorSupervisor
 from src.utils.language import format_indian_number
 from src.demo_data import DEMO_PROFILES, get_demo_goals
@@ -635,6 +639,116 @@ def render_chat():
             st.session_state.chat_history.append({"role": "assistant", "content": response})
 
 
+def render_investment_explorer():
+    """Render investment screener / explorer tab."""
+    st.header("Investment Explorer")
+    st.caption("Explore mutual funds and stocks with real market data. Not a buy/sell recommendation.")
+
+    tab_alloc, tab_mf, tab_stocks = st.tabs(["Asset Allocation", "MF Search", "Stock Screener"])
+
+    with tab_alloc:
+        col1, col2 = st.columns(2)
+        with col1:
+            goal_years = st.number_input("Investment Horizon (years)", 1, 30, 10)
+        with col2:
+            risk = st.selectbox("Risk Appetite", ["conservative", "moderate", "aggressive"], index=1)
+
+        if st.button("Get Allocation Suggestion", type="primary", key="alloc_btn"):
+            result = suggest_asset_allocation(goal_years, risk)
+
+            st.subheader(f"Model Allocation — {risk.title()}, {goal_years} years")
+
+            # Pie chart
+            labels = [a["category"] for a in result["allocation"]]
+            values = [a["allocation_pct"] for a in result["allocation"]]
+            fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=0.4)])
+            fig.update_layout(title="Recommended Category Split", height=400)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Details table
+            for alloc in result["allocation"]:
+                col1, col2, col3 = st.columns([3, 1, 1])
+                col1.write(f"**{alloc['category']}**")
+                col2.write(f"{alloc['allocation_pct']}%")
+                col3.write(f"Risk: {alloc['risk_level']}")
+
+            for note in result.get("notes", []):
+                st.info(note)
+
+    with tab_mf:
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            query = st.text_input("Search Mutual Funds", placeholder="e.g., large cap, HDFC flexi cap, nifty 50 index")
+        with col2:
+            st.write("")  # spacer
+            st.write("")
+            search_btn = st.button("Search", type="primary", key="mf_search_btn")
+
+        # Quick category buttons
+        st.write("**Quick search:**")
+        cat_cols = st.columns(5)
+        quick_query = None
+        categories = list(MF_CATEGORIES.items())[:5]
+        for i, (key, cat) in enumerate(categories):
+            with cat_cols[i]:
+                if st.button(cat["label"], key=f"cat_{key}"):
+                    quick_query = cat["search"]
+
+        active_query = quick_query or (query if search_btn else None)
+        if active_query:
+            with st.spinner("Searching funds..."):
+                results = search_mutual_funds(active_query)
+
+            if results and "error" not in results[0]:
+                st.success(f"Found {len(results)} matching Direct Growth plans")
+                for fund in results:
+                    col1, col2 = st.columns([4, 1])
+                    col1.write(f"**{fund['scheme_name']}**")
+                    if col2.button("Details", key=f"detail_{fund['scheme_code']}"):
+                        with st.spinner("Fetching fund data..."):
+                            details = get_fund_details(fund["scheme_code"])
+                        if "error" not in details:
+                            st.write(f"**{details.get('scheme_name', '')}**")
+                            st.write(f"Fund House: {details.get('fund_house', 'N/A')}")
+                            st.write(f"Category: {details.get('scheme_category', 'N/A')}")
+                            st.write(f"NAV: Rs {details.get('nav', 'N/A')} ({details.get('nav_date', '')})")
+                            ret_cols = st.columns(3)
+                            ret_cols[0].metric("1Y Return", f"{details.get('return_1y', 'N/A')}%")
+                            ret_cols[1].metric("3Y Return", f"{details.get('return_3y', 'N/A')}%")
+                            ret_cols[2].metric("5Y Return", f"{details.get('return_5y', 'N/A')}%")
+                        else:
+                            st.error(details["error"])
+            elif results:
+                st.error(results[0].get("error", "No results found"))
+            else:
+                st.warning("No matching funds found. Try a broader search term.")
+
+    with tab_stocks:
+        sector = st.selectbox(
+            "Filter by Sector",
+            ["All", "IT", "Banking", "FMCG", "Pharma", "Energy", "Auto", "Consumer", "Infrastructure", "Telecom"],
+        )
+
+        if st.button("Screen Stocks", type="primary", key="stock_btn"):
+            with st.spinner("Fetching stock data from NSE..."):
+                sector_filter = None if sector == "All" else sector
+                results = screen_stocks(sector=sector_filter)
+
+            if results and "error" not in results[0]:
+                st.success(f"Showing {len(results)} Nifty 50 stocks")
+                for stock in results:
+                    col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 1, 1])
+                    col1.write(f"**{stock['name']}** ({stock['ticker']})")
+                    col2.metric("Price", f"Rs {stock['price']:,.0f}")
+                    col3.metric("P/E", f"{stock.get('pe_ratio', 'N/A')}")
+                    col4.metric("Mkt Cap (Cr)", f"{stock.get('market_cap_cr', 'N/A'):,.0f}" if stock.get('market_cap_cr') else "N/A")
+                    col5.metric("Div Yield", f"{stock.get('dividend_yield_pct', 'N/A')}%")
+            elif results:
+                st.error(results[0].get("error", "Failed to fetch data"))
+
+        st.caption("Past performance does not guarantee future returns. Consult a SEBI-registered advisor.")
+
+
 # --- Main App ---
 
 def main():
@@ -644,11 +758,24 @@ def main():
     # Build profile from sidebar
     profile = build_profile_from_sidebar()
 
+    # Wire profile to AI supervisor for tool calling
+    st.session_state.supervisor.set_user_profile_object(profile)
+    st.session_state.supervisor.set_user_profile({
+        "name": profile.name,
+        "age": profile.age,
+        "city": profile.city.value,
+        "gross_salary": profile.salary.basic + profile.salary.hra + profile.salary.special_allowance + profile.salary.bonus,
+        "monthly_expenses": profile.monthly_expenses.total,
+        "emergency_fund": profile.emergency_fund,
+        "current_investments": profile.current_investments,
+        "monthly_sip": profile.monthly_sip,
+    })
+
     # Tab navigation
     tabs = st.tabs([
         "Chat", "Health Score", "Tax Wizard", "Goal Planner",
         "FIRE Calculator", "EMI & Loans", "Insurance",
-        "Retirement (SWP)", "Life Simulator",
+        "Retirement (SWP)", "Life Simulator", "Investment Explorer",
     ])
 
     with tabs[0]:
@@ -669,6 +796,8 @@ def main():
         render_retirement_planner()
     with tabs[8]:
         render_life_simulator(profile)
+    with tabs[9]:
+        render_investment_explorer()
 
     # Footer
     st.divider()

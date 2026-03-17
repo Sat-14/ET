@@ -13,6 +13,12 @@ from src.engines.goal_calculator import calculate_fire
 from src.engines.swp_calculator import calculate_swp, calculate_required_corpus
 from src.engines.tax_calculator import compare_regimes
 from src.engines.health_scorer import compute_money_health_score
+from src.engines.investment_screener import (
+    search_mutual_funds as _search_mf,
+    get_fund_details as _get_fund,
+    suggest_asset_allocation as _suggest_alloc,
+    screen_stocks as _screen_stocks,
+)
 
 
 def execute_tool(
@@ -106,6 +112,31 @@ def execute_tool(
                 })
             result = compute_money_health_score(user_profile)
             return json.dumps(result.to_dict(), default=str)
+
+        elif tool_name == "search_mutual_funds":
+            results = _search_mf(
+                query=str(arguments["query"]),
+                limit=int(float(arguments.get("limit", 8))),
+            )
+            return json.dumps(results, default=str)
+
+        elif tool_name == "get_fund_details":
+            result = _get_fund(scheme_code=str(arguments["scheme_code"]))
+            return json.dumps(result, default=str)
+
+        elif tool_name == "suggest_asset_allocation":
+            result = _suggest_alloc(
+                goal_years=int(float(arguments["goal_years"])),
+                risk_level=str(arguments.get("risk_level", "moderate")),
+            )
+            return json.dumps(result, default=str)
+
+        elif tool_name == "screen_stocks":
+            result = _screen_stocks(
+                sector=arguments.get("sector"),
+                limit=int(float(arguments.get("limit", 10))),
+            )
+            return json.dumps(result, default=str)
 
         else:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})

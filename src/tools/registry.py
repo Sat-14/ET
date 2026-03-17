@@ -1,6 +1,6 @@
 """Tool definitions for LLM function calling.
 
-Defines 8 tools that map to deterministic engine functions.
+Defines 12 tools that map to deterministic engine functions.
 Universal format — auto-converts to Gemini / OpenAI / Anthropic schemas.
 """
 
@@ -221,6 +221,82 @@ TOOLS = [
             "required": [],
         },
     },
+    # --- Investment Screener Tools ---
+    {
+        "name": "search_mutual_funds",
+        "description": (
+            "Search Indian mutual fund schemes by name or keyword. "
+            "Returns matching Direct Growth plans with scheme codes. "
+            "Use this to find funds in a category like 'large cap', 'flexi cap', 'ELSS', 'liquid', etc."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search keyword (e.g., 'large cap', 'HDFC flexi cap', 'ELSS tax saver', 'nifty 50 index')",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "get_fund_details",
+        "description": (
+            "Get detailed mutual fund information including NAV, category, fund house, "
+            "and annualized 1Y/3Y/5Y returns calculated from real historical data. "
+            "Requires a scheme_code from search_mutual_funds."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "scheme_code": {
+                    "type": "string",
+                    "description": "AMFI scheme code (e.g., '120503'). Get this from search_mutual_funds first.",
+                },
+            },
+            "required": ["scheme_code"],
+        },
+    },
+    {
+        "name": "suggest_asset_allocation",
+        "description": (
+            "Suggest a model asset allocation based on investment goal timeline and risk appetite. "
+            "Returns recommended MF category percentages (not specific funds). "
+            "Categories: Large Cap, Flexi Cap, Mid Cap, Small Cap, ELSS, Index, Hybrid, Debt, Liquid."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "goal_years": {
+                    "type": "integer",
+                    "description": "Number of years until the investment goal (e.g., 5 for 5 years)",
+                },
+                "risk_level": {
+                    "type": "string",
+                    "description": "Risk appetite: 'conservative', 'moderate', or 'aggressive'. Default 'moderate'.",
+                },
+            },
+            "required": ["goal_years"],
+        },
+    },
+    {
+        "name": "screen_stocks",
+        "description": (
+            "Screen Nifty 50 Indian stocks with basic fundamentals — price, P/E ratio, "
+            "market cap, dividend yield, 52-week range. Optionally filter by sector."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sector": {
+                    "type": "string",
+                    "description": "Filter by sector (e.g., 'IT', 'Banking', 'FMCG', 'Pharma', 'Energy', 'Auto'). Optional.",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -272,11 +348,12 @@ def tools_to_anthropic_format(tools: list[dict]) -> list[dict]:
 
 AGENT_TOOLS = {
     "tax_agent": ["compare_tax_regimes", "calculate_emi"],
-    "portfolio_agent": [],
-    "goal_agent": ["calculate_fire", "calculate_required_corpus", "calculate_swp", "calculate_emi"],
+    "portfolio_agent": ["search_mutual_funds", "get_fund_details"],
+    "goal_agent": ["calculate_fire", "calculate_required_corpus", "calculate_swp", "calculate_emi", "suggest_asset_allocation"],
     "health_agent": ["compute_health_score", "compare_tax_regimes"],
     "life_event_agent": ["calculate_emi", "calculate_swp", "calculate_required_corpus"],
-    "general_agent": [t["name"] for t in TOOLS],  # All tools
+    "screener_agent": ["search_mutual_funds", "get_fund_details", "suggest_asset_allocation", "screen_stocks"],
+    "general_agent": [t["name"] for t in TOOLS],  # All 12 tools
     "supervisor": [t["name"] for t in TOOLS],
 }
 

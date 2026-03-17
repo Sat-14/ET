@@ -29,6 +29,7 @@ from src.agents.prompts import (
     HEALTH_AGENT_PROMPT,
     LIFE_EVENT_AGENT_PROMPT,
     GENERAL_AGENT_PROMPT,
+    SCREENER_AGENT_PROMPT,
 )
 from src.tools.registry import (
     get_tools_for_agent,
@@ -89,6 +90,13 @@ INTENT_KEYWORDS = {
         "baby", "pregnant", "house purchase", "buy house", "buy car",
         "early retire", "start business", "career break", "bonus",
     ],
+    "screener_agent": [
+        "which fund", "best fund", "top fund", "suggest fund", "recommend fund",
+        "which stock", "best stock", "nifty", "large cap", "mid cap", "small cap",
+        "flexi cap", "elss", "index fund", "where to invest", "which mutual fund",
+        "stock screen", "compare fund", "fund details", "allocation",
+        "explore fund", "search fund",
+    ],
     "general_agent": [
         "emi", "loan", "prepay", "prepayment", "installment",
         "borrow", "lending", "repay", "home loan", "car loan",
@@ -103,6 +111,7 @@ AGENT_PROMPTS = {
     "goal_agent": GOAL_AGENT_PROMPT,
     "health_agent": HEALTH_AGENT_PROMPT,
     "life_event_agent": LIFE_EVENT_AGENT_PROMPT,
+    "screener_agent": SCREENER_AGENT_PROMPT,
     "general_agent": GENERAL_AGENT_PROMPT,
 }
 
