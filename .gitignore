@@ -1,0 +1,26 @@
+# Environments
+.venv/
+venv/
+env/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Environment variables
+.env
+.env.*
+
+# Generated Data
+*.pdf
+*.sqlite3
+/data/
+
+# Testing & Tools
+.pytest_cache/
+htmlcov/
+.coverage
+.mypy_cache/

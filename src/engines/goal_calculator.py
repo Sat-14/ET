@@ -10,11 +10,9 @@ Handles:
 from __future__ import annotations
 
 import random
-import math
 from dataclasses import dataclass, field
-from datetime import datetime
 
-from src.models.goals import FinancialGoal, GoalType, GoalPriority
+from src.models.goals import FinancialGoal, GoalPriority
 
 
 # Historical Nifty 50 annual returns for Monte Carlo

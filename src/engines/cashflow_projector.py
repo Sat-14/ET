@@ -6,11 +6,11 @@ and computing impact on Money Health Score dimensions.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 from src.models.user import IndividualProfile
-from src.models.goals import LifeEvent, LifeEventType
+from src.models.goals import LifeEvent
 
 
 @dataclass
@@ -107,8 +107,6 @@ def project_cashflows(
     monthly_sip = profile.monthly_sip
 
     # Monthly growth rates
-    monthly_income_growth = (1 + annual_income_growth) ** (1 / 12) - 1
-    monthly_expense_growth = (1 + annual_expense_inflation) ** (1 / 12) - 1
     monthly_investment_return = (1 + investment_return) ** (1 / 12) - 1
 
     timeline: list[MonthlySnapshot] = []

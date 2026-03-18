@@ -9,7 +9,6 @@ Generates shareable financial health reports:
 
 from __future__ import annotations
 
-import io
 from datetime import date
 
 from fpdf import FPDF
@@ -53,7 +52,7 @@ class FinancialReport(FPDF):
     def body_text(self, text: str):
         self.set_font("Helvetica", "", 10)
         self.set_text_color(55, 55, 55)
-        self.multi_cell(0, 6, text)
+        self.multi_cell(0, 6, text, new_x="LMARGIN", new_y="NEXT")
         self.ln(2)
 
     def metric_row(self, label: str, value: str, highlight: bool = False):
@@ -146,7 +145,7 @@ def generate_health_score_pdf(report_data: dict) -> bytes:
         for i, action in enumerate(actions, 1):
             pdf.set_font("Helvetica", "", 10)
             pdf.set_text_color(55, 55, 55)
-            pdf.multi_cell(0, 6, f"{i}. {action}")
+            pdf.multi_cell(0, 6, f"{i}. {action}", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(3)
 
     # Dimension recommendations
@@ -161,10 +160,10 @@ def generate_health_score_pdf(report_data: dict) -> bytes:
             for rec in recs:
                 pdf.set_font("Helvetica", "", 9)
                 pdf.set_text_color(80, 80, 80)
-                pdf.multi_cell(0, 5, f"  - {rec}")
+                pdf.multi_cell(0, 5, f"  - {rec}", new_x="LMARGIN", new_y="NEXT")
             pdf.ln(2)
 
-    return pdf.output()
+    return bytes(pdf.output())
 
 
 def generate_tax_comparison_pdf(
@@ -218,7 +217,7 @@ def generate_tax_comparison_pdf(
     pdf.metric_row("Old Regime Effective Rate", f"{old_regime.get('effective_rate', 0):.1f}%")
     pdf.metric_row("New Regime Effective Rate", f"{new_regime.get('effective_rate', 0):.1f}%")
 
-    return pdf.output()
+    return bytes(pdf.output())
 
 
 def generate_goal_report_pdf(goals: list[dict]) -> bytes:
@@ -250,11 +249,11 @@ def generate_goal_report_pdf(goals: list[dict]) -> bytes:
             pdf.set_font("Helvetica", "I", 9)
             pdf.set_text_color(100, 100, 100)
             for note in notes:
-                pdf.multi_cell(0, 5, f"  * {note}")
+                pdf.multi_cell(0, 5, f"  * {note}", new_x="LMARGIN", new_y="NEXT")
 
         pdf.ln(5)
 
-    return pdf.output()
+    return bytes(pdf.output())
 
 
 def generate_full_report_pdf(
@@ -339,4 +338,4 @@ def generate_full_report_pdf(
             pdf.metric_row("Progress", f"{goal.get('progress_pct', 0):.0f}%")
             pdf.ln(3)
 
-    return pdf.output()
+    return bytes(pdf.output())

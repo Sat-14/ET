@@ -10,14 +10,11 @@ Supports:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from src.models.user import (
     City,
-    Deductions,
     IndividualProfile,
     HouseholdProfile,
-    SalaryBreakup,
     TaxRegime,
 )
 
@@ -394,9 +391,9 @@ def optimize_couple_tax(household: HouseholdProfile) -> dict:
     income_b = household.person_b.annual_income
 
     if income_a > income_b:
-        higher_earner, lower_earner = "Person A", "Person B"
+        higher_earner, _ = "Person A", "Person B"
     else:
-        higher_earner, lower_earner = "Person B", "Person A"
+        higher_earner, _ = "Person B", "Person A"
 
     notes.append(
         f"{higher_earner} is in a higher tax slab - maximize deductions here"

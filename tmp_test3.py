@@ -1,0 +1,10 @@
+from fpdf import FPDF
+pdf = FPDF()
+pdf.add_page()
+pdf.set_font("Helvetica", "", 10)
+pdf.multi_cell(0, 6, "1. Build an emergency fund of Rs 200,000", new_x="LMARGIN", new_y="NEXT")
+print("After first multi_cell: ", pdf.get_x(), pdf.get_y())
+pdf.multi_cell(0, 6, "2. Start investing in Mutual Funds", new_x="LMARGIN", new_y="NEXT")
+print("After second multi_cell: ", pdf.get_x(), pdf.get_y())
+pdf.output("/tmp/test2.pdf")
+print("Done!")

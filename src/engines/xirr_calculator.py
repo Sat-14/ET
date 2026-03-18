@@ -7,14 +7,13 @@ Also handles: absolute return, CAGR, and SIP return analysis.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 from src.models.portfolio import (
     Portfolio,
     FundHolding,
     Transaction,
-    TransactionType,
     FundOverlap,
 )
 

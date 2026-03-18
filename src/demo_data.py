@@ -318,7 +318,7 @@ def get_demo_goals() -> list[FinancialGoal]:
         ),
         FinancialGoal(
             name="Daughter's Education (IIT/IIM)",
-            goal_type=GoalType.EDUCATION,
+            goal_type=GoalType.CHILD_EDUCATION,
             target_amount=3_000_000,
             target_year=2038,
             current_corpus=200_000,
@@ -329,7 +329,7 @@ def get_demo_goals() -> list[FinancialGoal]:
         ),
         FinancialGoal(
             name="Dream Home Down Payment",
-            goal_type=GoalType.HOME,
+            goal_type=GoalType.HOME_PURCHASE,
             target_amount=2_000_000,
             target_year=2030,
             current_corpus=300_000,
@@ -340,7 +340,7 @@ def get_demo_goals() -> list[FinancialGoal]:
         ),
         FinancialGoal(
             name="Europe Family Trip",
-            goal_type=GoalType.TRAVEL,
+            goal_type=GoalType.VACATION,
             target_amount=500_000,
             target_year=2028,
             current_corpus=50_000,
@@ -376,7 +376,7 @@ def get_demo_life_events() -> list[LifeEvent]:
             duration_months=0,
         ),
         LifeEvent(
-            event_type=LifeEventType.CHILD_BIRTH,
+            event_type=LifeEventType.HAVING_BABY,
             name="First Child",
             year=2030,
             month=6,

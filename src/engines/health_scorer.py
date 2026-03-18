@@ -16,8 +16,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from src.models.user import IndividualProfile, TaxRegime
-from src.models.portfolio import Portfolio, FundCategory
+from src.models.user import IndividualProfile
+from src.models.portfolio import Portfolio
 from src.engines.tax_calculator import compare_regimes
 
 

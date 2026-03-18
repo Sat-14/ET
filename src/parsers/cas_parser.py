@@ -6,9 +6,8 @@ and convert them into our internal Portfolio model.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from src.models.portfolio import (
     Portfolio,

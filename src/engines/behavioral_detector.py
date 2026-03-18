@@ -17,13 +17,11 @@ Biases detected:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date, timedelta
 from collections import defaultdict
 
 from src.models.portfolio import (
     Portfolio,
-    FundHolding,
     Transaction,
     TransactionType,
     BehavioralPattern,

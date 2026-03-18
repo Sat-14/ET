@@ -20,48 +20,34 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Query
+from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from src.models.user import (
     IndividualProfile,
-    HouseholdProfile,
     SalaryBreakup,
     Deductions,
     InsuranceCoverage,
     Debt,
     MonthlyExpenses,
-    TaxRegime,
     Gender,
     City,
 )
 from src.models.goals import FinancialGoal, GoalType, GoalPriority, LifeEvent, LifeEventType
-from src.models.portfolio import Portfolio
 
 from src.engines.tax_calculator import (
     compute_tax_old_regime,
     compute_tax_new_regime,
     compare_regimes,
-    optimize_couple_tax,
 )
 from src.engines.health_scorer import compute_money_health_score
 from src.engines.goal_calculator import (
-    plan_goal,
     plan_all_goals,
     calculate_fire,
     monte_carlo_simulation,
     allocate_sip_across_goals,
-)
-from src.engines.xirr_calculator import (
-    compute_portfolio_returns,
-    analyze_fund_overlap,
-    analyze_expense_ratios,
-)
-from src.engines.behavioral_detector import (
-    run_full_behavioral_analysis,
-    generate_behavioral_summary,
 )
 from src.engines.cashflow_projector import compare_scenarios
 from src.engines.emi_calculator import (
@@ -84,19 +70,15 @@ from src.engines.swp_calculator import (
 from src.engines.report_generator import (
     generate_health_score_pdf,
     generate_tax_comparison_pdf,
-    generate_goal_report_pdf,
     generate_full_report_pdf,
 )
 from src.demo_data import (
     DEMO_PROFILES,
-    get_demo_profile_young,
-    get_demo_portfolio,
     get_demo_goals,
-    get_demo_life_events,
 )
 
 from src.agents.supervisor import MoneyMentorSupervisor
-from src.utils.language import detect_language, get_language_instruction
+from src.utils.language import detect_language
 from src.utils.whatsapp import WhatsAppClient
 
 

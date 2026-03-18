@@ -11,9 +11,9 @@ Model portfolios based on risk profile and age:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from src.models.portfolio import Portfolio, FundHolding, FundCategory
+from src.models.portfolio import Portfolio, FundCategory
 
 
 # Broad asset classes
