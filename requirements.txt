@@ -1,7 +1,7 @@
 # Core Backend
-fastapi==0.115.0
+fastapi==0.135.2
 uvicorn[standard]==0.30.0
-pydantic==2.9.0
+pydantic==2.12.5
 
 # =========================================================================
 # LLM Providers (install the one you want to use - all have free tiers)
