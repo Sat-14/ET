@@ -48,8 +48,8 @@ sqlalchemy==2.0.35
 aiosqlite==0.20.0
 
 # Dashboard & Visualization
-streamlit==1.39.0
-plotly==5.24.0
+streamlit==1.55.0
+plotly==6.6.0
 
 # Utilities
 python-dotenv==1.0.1
