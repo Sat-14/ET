@@ -24,7 +24,7 @@ anthropic>=0.39.0
 # crewai==0.80.0
 
 # Financial Engines
-pyxirr==0.10.6                    # XIRR, IRR, PMT, FV, PV - Rust-powered, replaces custom math
+pyxirr==0.10.8                    # XIRR, IRR, PMT, FV, PV - Rust-powered, replaces custom math
 numpy-financial>=1.0.0            # Backup: pmt, fv, pv, npv, irr (from NumPy org)
 mftool>=3.0                       # Indian MF NAV data (AMFI)
 
@@ -37,7 +37,7 @@ quantstats>=0.0.62                # Sharpe, Sortino, drawdown, tear sheets, HTML
 PyPortfolioOpt>=1.5.5             # Mean-variance optimization, Black-Litterman, HRP
 
 # PDF & Document Parsing
-casparser==0.7.4                  # CAS PDF parsing (CAMS/KFintech)
+casparser==0.8.1                  # CAS PDF parsing (CAMS/KFintech)
 pdfplumber==0.10.3                # Form-16 / salary slip parsing
 python-multipart>=0.0.9           # FastAPI file upload support
 PyMuPDF==1.24.0                   # PDF rendering fallback
