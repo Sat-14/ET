@@ -501,7 +501,6 @@ def _no_key_response(key_name: str, signup_url: str) -> str:
         "work without an API key - only the AI chat needs one."
     )
 
-
 def _fallback_response(messages: list[dict]) -> str:
     """Fallback response when no API is available."""
     last_msg = messages[-1]["content"] if messages else ""
