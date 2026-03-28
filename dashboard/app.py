@@ -764,28 +764,41 @@ def render_investment_explorer():
 
         active_query = quick_query or (query if search_btn else None)
         if active_query:
+            st.session_state.mf_active_query = active_query
+
+        current_query = st.session_state.get("mf_active_query")
+        if current_query:
             with st.spinner("Searching funds..."):
-                results = search_mutual_funds(active_query)
+                results = search_mutual_funds(current_query)
 
             if results and "error" not in results[0]:
                 st.success(f"Found {len(results)} matching Direct Growth plans")
                 for fund in results:
                     col1, col2 = st.columns([4, 1])
                     col1.write(f"**{fund['scheme_name']}**")
-                    if col2.button("Details", key=f"detail_{fund['scheme_code']}"):
-                        with st.spinner("Fetching fund data..."):
-                            details = get_fund_details(fund["scheme_code"])
-                        if "error" not in details:
-                            st.write(f"**{details.get('scheme_name', '')}**")
-                            st.write(f"Fund House: {details.get('fund_house', 'N/A')}")
-                            st.write(f"Category: {details.get('scheme_category', 'N/A')}")
-                            st.write(f"NAV: Rs {details.get('nav', 'N/A')} ({details.get('nav_date', '')})")
-                            ret_cols = st.columns(3)
-                            ret_cols[0].metric("1Y Return", f"{details.get('return_1y', 'N/A')}%")
-                            ret_cols[1].metric("3Y Return", f"{details.get('return_3y', 'N/A')}%")
-                            ret_cols[2].metric("5Y Return", f"{details.get('return_5y', 'N/A')}%")
-                        else:
-                            st.error(details["error"])
+                    
+                    state_key = f"expand_{fund['scheme_code']}"
+                    is_expanded = st.session_state.get(state_key, False)
+                    
+                    if col2.button("Hide Details" if is_expanded else "Details", key=f"detail_{fund['scheme_code']}"):
+                        is_expanded = not is_expanded
+                        st.session_state[state_key] = is_expanded
+
+                    if is_expanded:
+                        with st.container(border=True):
+                            with st.spinner("Fetching fund data..."):
+                                details = get_fund_details(fund["scheme_code"])
+                            if "error" not in details:
+                                st.write(f"**{details.get('scheme_name', '')}**")
+                                st.write(f"Fund House: {details.get('fund_house', 'N/A')}")
+                                st.write(f"Category: {details.get('scheme_category', 'N/A')}")
+                                st.write(f"NAV: Rs {details.get('nav', 'N/A')} ({details.get('nav_date', '')})")
+                                ret_cols = st.columns(3)
+                                ret_cols[0].metric("1Y Return", f"{details.get('return_1y', 'N/A')}%")
+                                ret_cols[1].metric("3Y Return", f"{details.get('return_3y', 'N/A')}%")
+                                ret_cols[2].metric("5Y Return", f"{details.get('return_5y', 'N/A')}%")
+                            else:
+                                st.error(details["error"])
             elif results:
                 st.error(results[0].get("error", "No results found"))
             else:
