@@ -844,16 +844,8 @@ def main():
 
     # Wire profile to AI supervisor for tool calling
     st.session_state.supervisor.set_user_profile_object(profile)
-    st.session_state.supervisor.set_user_profile({
-        "name": profile.name,
-        "age": profile.age,
-        "city": profile.city.value,
-        "gross_salary": profile.salary.basic + profile.salary.hra + profile.salary.special_allowance + profile.salary.bonus,
-        "monthly_expenses": profile.monthly_expenses.total,
-        "emergency_fund": profile.emergency_fund,
-        "current_investments": profile.current_investments,
-        "monthly_sip": profile.monthly_sip,
-    })
+    health_report = compute_money_health_score(profile)
+    st.session_state.supervisor.set_user_profile(health_report.to_dict())
 
     # Tab navigation
     tabs = st.tabs([
