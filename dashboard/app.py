@@ -15,6 +15,7 @@ A comprehensive financial dashboard with:
 import sys
 import os
 import asyncio
+import tempfile
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -43,6 +44,7 @@ from src.engines.investment_screener import (
 from src.agents.supervisor import MoneyMentorSupervisor
 from src.utils.language import format_indian_number
 from src.demo_data import DEMO_PROFILES, get_demo_goals
+from src.parsers.form16_parser import parse_form16_pdf, merge_form16_into_profile
 
 
 # --- Page Config ---
@@ -216,6 +218,72 @@ def render_health_score(profile: IndividualProfile):
 def render_tax_comparison(profile: IndividualProfile):
     """Render tax comparison section."""
     st.header("Tax Wizard - Old vs New Regime")
+
+    tab_manual, tab_form16 = st.tabs(["Manual Entry", "Upload Form-16"])
+
+    with tab_manual:
+        _render_tax_comparison_result(profile)
+
+    with tab_form16:
+        st.caption("Upload a Form-16 PDF to prefill salary and deductions, then compare regimes instantly.")
+        uploaded_file = st.file_uploader(
+            "Upload Form-16 PDF",
+            type=["pdf"],
+            key="tax_form16_upload",
+        )
+
+        if uploaded_file is not None:
+            suffix = os.path.splitext(uploaded_file.name)[1] or ".pdf"
+            temp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                    tmp.write(uploaded_file.getbuffer())
+                    temp_path = tmp.name
+
+                parsed = parse_form16_pdf(temp_path)
+                form16_profile = merge_form16_into_profile(parsed, base_profile=profile)
+
+                st.success(f"Parsed {uploaded_file.name}")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Gross Salary", format_indian_number(parsed.get("gross_salary", 0)))
+                col2.metric("Taxable Income", format_indian_number(parsed.get("taxable_income", 0)))
+                col3.metric("TDS Deducted", format_indian_number(parsed.get("tds_deducted", 0)))
+
+                extracted_deductions = parsed.get("deductions", {})
+                if extracted_deductions:
+                    st.subheader("Extracted Deductions")
+                    ded_cols = st.columns(3)
+                    ded_items = [
+                        ("80C", extracted_deductions.get("80C", 0)),
+                        ("80CCD(1B)", extracted_deductions.get("80CCD_1B", 0)),
+                        ("80D", extracted_deductions.get("80D", 0)),
+                        ("24(b)", extracted_deductions.get("24b", 0)),
+                        ("80E", extracted_deductions.get("80E", 0)),
+                        ("80G", extracted_deductions.get("80G", 0)),
+                    ]
+                    for idx, (label, value) in enumerate(ded_items):
+                        with ded_cols[idx % 3]:
+                            st.metric(label, format_indian_number(value))
+
+                st.info(
+                    "Using Form-16 for salary and deductions. City, other income, and the rest of your profile "
+                    "still come from the sidebar, so you can refine the result if needed."
+                )
+                _render_tax_comparison_result(form16_profile)
+            except ImportError as exc:
+                st.error(str(exc))
+            except ValueError as exc:
+                st.error(str(exc))
+            finally:
+                if temp_path:
+                    try:
+                        os.unlink(temp_path)
+                    except OSError:
+                        pass
+
+
+def _render_tax_comparison_result(profile: IndividualProfile):
+    """Render tax comparison metrics for a fully built profile."""
 
     comp = compare_regimes(profile)
     old = comp.old_regime

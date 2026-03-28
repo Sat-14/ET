@@ -18,9 +18,10 @@ Provides REST API endpoints for:
 from __future__ import annotations
 
 import os
+import tempfile
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request, Query
+from fastapi import FastAPI, HTTPException, Request, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -75,6 +76,10 @@ from src.engines.report_generator import (
 from src.demo_data import (
     DEMO_PROFILES,
     get_demo_goals,
+)
+from src.parsers.form16_parser import (
+    parse_form16_pdf,
+    merge_form16_into_profile,
 )
 
 from src.agents.supervisor import MoneyMentorSupervisor
@@ -389,6 +394,47 @@ def tax_new(profile: ProfileInput):
     p = _build_profile(profile)
     result = compute_tax_new_regime(p)
     return result.to_dict()
+
+
+@app.post("/tax/form16/analyze")
+async def tax_form16_analyze(
+    file: UploadFile = File(...),
+    city: str = Form("metro"),
+    other_income: float = Form(0),
+):
+    """Parse a Form-16 PDF and run tax comparison on extracted values."""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Please upload a PDF Form-16 file.")
+
+    suffix = os.path.splitext(file.filename)[1] or ".pdf"
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(await file.read())
+            temp_path = tmp.name
+
+        parsed = parse_form16_pdf(temp_path)
+        profile = merge_form16_into_profile(parsed)
+        profile.city = City(city)
+        profile.other_income = other_income
+        comparison = compare_regimes(profile)
+
+        return {
+            "filename": file.filename,
+            "parsed_data": parsed,
+            "normalized_salary": profile.salary.__dict__,
+            "normalized_deductions": profile.deductions.__dict__,
+            "comparison": comparison.to_dict(),
+        }
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        try:
+            if "temp_path" in locals():
+                os.unlink(temp_path)
+        except OSError:
+            pass
 
 
 # --- Health Score ---

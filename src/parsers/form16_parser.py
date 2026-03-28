@@ -6,10 +6,11 @@ Form-16 PDFs and salary slip inputs.
 
 from __future__ import annotations
 
+from copy import deepcopy
 import re
 from pathlib import Path
 
-from src.models.user import SalaryBreakup, Deductions
+from src.models.user import IndividualProfile, SalaryBreakup, Deductions
 
 
 def parse_form16_pdf(file_path: str | Path) -> dict:
@@ -174,3 +175,18 @@ def parse_salary_input(salary_data: dict) -> SalaryBreakup:
         professional_tax=float(salary_data.get("professional_tax", 0)),
         bonus=float(salary_data.get("bonus", 0)),
     )
+
+
+def merge_form16_into_profile(
+    parsed_data: dict,
+    base_profile: IndividualProfile | None = None,
+) -> IndividualProfile:
+    """Create a profile using Form-16 derived salary and deductions.
+
+    If a base profile is provided, keep non-tax fields from it and override only
+    salary and deductions with the parsed values.
+    """
+    profile = deepcopy(base_profile) if base_profile is not None else IndividualProfile()
+    profile.salary = form16_to_salary_breakup(parsed_data)
+    profile.deductions = form16_to_deductions(parsed_data)
+    return profile
