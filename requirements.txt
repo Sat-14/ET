@@ -38,9 +38,9 @@ PyPortfolioOpt>=1.5.5             # Mean-variance optimization, Black-Litterman,
 
 # PDF & Document Parsing
 casparser==0.7.4                  # CAS PDF parsing (CAMS/KFintech)
-pdfplumber==0.10.3                # Form-16 / salary slip parsing
+pdfplumber==0.11.9                # Form-16 / salary slip parsing
 python-multipart>=0.0.9           # FastAPI file upload support
-PyMuPDF==1.24.0                   # PDF rendering fallback
+PyMuPDF==1.27.2.2                   # PDF rendering fallback
 fpdf2>=2.7.9                      # PDF report generation (lightweight, Unicode/Hindi support)
 
 # Data & Storage
