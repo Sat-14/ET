@@ -5,38 +5,26 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  test:
+  lint-and-smoke:
+    name: Lint and Smoke Test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12"]
+    timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run tests
-        run: |
-          python -m pytest tests/ -v --tb=short
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -48,6 +36,64 @@ jobs:
           pip install -r requirements.txt
           pip install ruff
 
-      - name: Lint with Ruff
+      - name: Lint source, dashboard, and tests
         run: |
-          ruff check src/ tests/ --select E,F,W --ignore E501
+          ruff check src dashboard tests --select E,F,W --ignore E501
+
+      - name: Syntax smoke test
+        run: |
+          python -m py_compile src/main.py dashboard/app.py src/engines/fire_path_planner.py
+
+      - name: App import smoke test
+        run: |
+          python -c "from src.main import app; print(app.title)"
+
+  test:
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    needs: lint-and-smoke
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest-cov
+
+      - name: Syntax smoke test
+        run: |
+          python -m py_compile src/main.py dashboard/app.py src/engines/fire_path_planner.py
+
+      - name: FastAPI import smoke test
+        run: |
+          python -c "from src.main import app; print(app.title)"
+
+      - name: Run test suite with coverage
+        run: |
+          python -m pytest tests/ -v --tb=short --cov=src --cov-report=xml:coverage.xml --junitxml=pytest.xml
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: |
+            coverage.xml
+            pytest.xml
+          if-no-files-found: ignore

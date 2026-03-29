@@ -1,0 +1,80 @@
+name: Feature Request
+description: Propose an improvement, automation, or product feature.
+title: "[Feature] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for product improvements, developer tooling, automation, or workflow enhancements.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: What part of the repo should this improve?
+      options:
+        - Backend API
+        - Dashboard / Streamlit
+        - Portfolio X-Ray
+        - FIRE / Goal Planner
+        - Tax / Insurance / Health Score
+        - AI Chat / Agents
+        - GitHub Actions / CI
+        - Documentation
+        - Developer Experience
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: summary
+    attributes:
+      label: Short summary
+      placeholder: One-line description of the requested feature
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What pain point or repo issue does this address?
+      placeholder: Describe the current limitation or friction.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the change you want to see.
+      placeholder: Explain the behavior, workflow, or automation you want added.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional. Describe workarounds or rejected ideas.
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - High
+        - Medium
+        - Low
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I searched existing issues before opening this feature request.
+          required: true
+        - label: This request describes a concrete problem and a concrete improvement.
+          required: true

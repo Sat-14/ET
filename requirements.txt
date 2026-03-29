@@ -3,64 +3,37 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.0
 pydantic==2.9.0
 
-# =========================================================================
-# LLM Providers (install the one you want to use - all have free tiers)
-# =========================================================================
-# Option 1: Google Gemini (RECOMMENDED - truly free)
+# LLM Providers (all four installed — app auto-selects based on .env key)
 google-generativeai>=0.8.0
-
-# Option 2: Groq + Llama 3.3 70B (free, fastest inference)
 groq>=0.11.0
-
-# Option 3: DeepSeek (free tokens, uses openai SDK)
 openai>=1.50.0
-
-# Option 4: Anthropic Claude (paid, best quality)
 anthropic>=0.39.0
 
-# AI Agent Frameworks (optional - for advanced multi-agent)
-# langchain==0.3.7
-# langgraph==0.2.0
-# crewai==0.80.0
-
 # Financial Engines
-pyxirr==0.10.6                    # XIRR, IRR, PMT, FV, PV - Rust-powered, replaces custom math
-numpy-financial>=1.0.0            # Backup: pmt, fv, pv, npv, irr (from NumPy org)
-mftool>=3.0                       # Indian MF NAV data (AMFI)
+pyxirr>=0.10.0
+numpy-financial>=1.0.0
+mftool>=3.0
 
-# Market Data (free, no API key)
-yfinance>=0.2.40                  # Indian stocks via .NS/.BO, Nifty data, dividends
-jugaad-data>=0.25                 # NSE/BSE historical data + RBI economic data
-
-# Portfolio Analytics
-quantstats>=0.0.62                # Sharpe, Sortino, drawdown, tear sheets, HTML reports
-PyPortfolioOpt>=1.5.5             # Mean-variance optimization, Black-Litterman, HRP
+# Market Data
+yfinance>=0.2.40
 
 # PDF & Document Parsing
-casparser==0.7.4                  # CAS PDF parsing (CAMS/KFintech)
-pdfplumber==0.10.3                # Form-16 / salary slip parsing
-python-multipart>=0.0.9           # FastAPI file upload support
-PyMuPDF==1.24.0                   # PDF rendering fallback
-fpdf2>=2.7.9                      # PDF report generation (lightweight, Unicode/Hindi support)
-
-# Data & Storage
-redis==5.2.0
-sqlalchemy==2.0.35
-aiosqlite==0.20.0
+casparser>=0.7.0
+pdfplumber>=0.10.0
+python-multipart>=0.0.9
+fpdf2>=2.7.9
 
 # Dashboard & Visualization
-streamlit==1.39.0
-plotly==5.24.0
+streamlit>=1.39.0
+plotly>=5.24.0
 
 # Utilities
-python-dotenv==1.0.1
-httpx==0.27.0
-numpy==1.26.4
-pandas==2.2.3
-
-# WhatsApp
-requests==2.32.3
+python-dotenv>=1.0.0
+httpx>=0.27.0
+numpy>=1.26.0
+pandas>=2.2.0
+requests>=2.31.0
 
 # Testing
-pytest==8.3.3
-pytest-asyncio==0.24.0
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
