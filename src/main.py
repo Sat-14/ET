@@ -39,6 +39,7 @@ from src.models.user import (
     MonthlyExpenses,
     Gender,
     City,
+    HouseholdProfile,
 )
 from src.models.goals import FinancialGoal, GoalType, GoalPriority, LifeEvent, LifeEventType
 
@@ -46,6 +47,8 @@ from src.engines.tax_calculator import (
     compute_tax_old_regime,
     compute_tax_new_regime,
     compare_regimes,
+    optimize_couple_tax,
+    recommend_tax_saving_options,
 )
 from src.engines.health_scorer import compute_money_health_score
 from src.engines.goal_calculator import (
@@ -54,7 +57,8 @@ from src.engines.goal_calculator import (
     monte_carlo_simulation,
     allocate_sip_across_goals,
 )
-from src.engines.cashflow_projector import compare_scenarios
+from src.engines.fire_path_planner import build_fire_master_plan
+from src.engines.cashflow_projector import compare_scenarios, analyze_life_event_advisor
 from src.engines.emi_calculator import (
     calculate_emi,
     generate_amortization_schedule,
@@ -80,11 +84,26 @@ from src.engines.report_generator import (
 from src.demo_data import (
     DEMO_PROFILES,
     get_demo_goals,
+    get_demo_couple,
+    get_demo_portfolio,
 )
 from src.parsers.form16_parser import (
     parse_form16_pdf,
     merge_form16_into_profile,
 )
+from src.parsers.cas_parser import parse_cas_pdf
+from src.parsers.cas_parser import parse_cas_from_dict
+from src.engines.xirr_calculator import (
+    compute_portfolio_returns,
+    analyze_fund_overlap,
+    analyze_expense_ratios,
+    analyze_benchmark_comparison,
+)
+from src.engines.behavioral_detector import (
+    run_full_behavioral_analysis,
+    generate_behavioral_summary,
+)
+from src.engines.rebalancer import generate_rebalance_plan
 
 from src.agents.supervisor import MoneyMentorSupervisor
 from src.utils.language import detect_language
@@ -241,6 +260,32 @@ class BucketStrategyInput(BaseModel):
     years_in_retirement: int = 25
 
 
+class CoupleInput(BaseModel):
+    person_a: ProfileInput
+    person_b: ProfileInput
+    shared_monthly_misc: float = 0
+    num_dependents: int = 0
+    shared_annual_rent: float = 0
+    target_monthly_sip: float = 0
+
+
+class HealthScoreInput(BaseModel):
+    profile: ProfileInput
+    portfolio: Optional[dict] = None
+
+
+class FireMasterPlanInput(BaseModel):
+    profile: ProfileInput
+    goals: list[GoalInput] = Field(default_factory=list)
+    portfolio: Optional[dict] = None
+    expected_return: float = 0.10
+    inflation_rate: float = 0.06
+    safe_withdrawal_rate: float = 0.04
+    annual_income_growth: float = 0.08
+    annual_expense_inflation: float = 0.06
+    horizon_months: Optional[int] = None
+
+
 # --- Helper: Convert Pydantic input to dataclass ---
 
 def _build_profile(data: ProfileInput) -> IndividualProfile:
@@ -296,6 +341,49 @@ def _build_profile(data: ProfileInput) -> IndividualProfile:
     )
 
 
+def _build_goals(goals: list[GoalInput]) -> list[FinancialGoal]:
+    goal_types = {item.value for item in GoalType}
+    priorities = {item.value for item in GoalPriority}
+    goal_list = []
+    for goal in goals:
+        goal_list.append(FinancialGoal(
+            name=goal.name,
+            goal_type=GoalType(goal.goal_type) if goal.goal_type in goal_types else GoalType.CUSTOM,
+            target_amount=goal.target_amount,
+            target_year=goal.target_year,
+            current_corpus=goal.current_corpus,
+            monthly_sip=goal.monthly_sip,
+            inflation_rate=goal.inflation_rate,
+            expected_return=goal.expected_return,
+            priority=GoalPriority(goal.priority) if goal.priority in priorities else GoalPriority.MEDIUM,
+        ))
+    return goal_list
+
+
+def _portfolio_context_summary(portfolio) -> dict:
+    """Create lightweight portfolio context for chat and UI state."""
+    return {
+        "investor_name": portfolio.investor_name,
+        "num_funds": portfolio.num_funds,
+        "total_invested": round(portfolio.total_invested),
+        "total_current_value": round(portfolio.total_current_value),
+        "total_gain": round(portfolio.total_gain),
+        "category_allocation": {
+            category.value: round(pct, 1)
+            for category, pct in portfolio.category_allocation().items()
+        },
+    }
+
+
+def _attach_portfolio_to_session(session_id: str, portfolio) -> None:
+    """Attach a parsed portfolio to a chat session for tool use."""
+    if session_id not in chat_sessions:
+        chat_sessions[session_id] = MoneyMentorSupervisor()
+    supervisor = chat_sessions[session_id]
+    supervisor.set_portfolio_object(portfolio)
+    supervisor.set_portfolio_data(_portfolio_context_summary(portfolio))
+
+
 # --- App Setup ---
 
 chat_sessions: dict[str, MoneyMentorSupervisor] = {}
@@ -324,15 +412,16 @@ def root():
         "version": "1.0.0",
         "status": "running",
         "features": {
-            "tax": ["/tax/compare", "/tax/old-regime", "/tax/new-regime"],
-            "health": ["/health-score"],
-            "goals": ["/goals/plan", "/fire", "/goals/allocate", "/monte-carlo"],
-            "simulation": ["/simulate"],
+            "tax": ["/tax/compare", "/tax/old-regime", "/tax/new-regime", "/tax/couple"],
+            "health": ["/health-score", "/health-score/with-portfolio"],
+            "goals": ["/goals/plan", "/fire", "/fire/master-plan", "/goals/allocate", "/monte-carlo"],
+            "simulation": ["/simulate", "/simulate/advisor"],
             "loans": ["/emi", "/emi/prepayment", "/emi/prepay-vs-invest", "/emi/compare"],
             "insurance": ["/insurance/life", "/insurance/health"],
             "retirement": ["/swp", "/swp/safe-withdrawal", "/swp/required-corpus", "/swp/bucket-strategy"],
+            "portfolio": ["/portfolio/upload", "/demo/portfolio"],
             "reports": ["/report/health-score", "/report/tax", "/report/goals", "/report/full"],
-            "demo": ["/demo/profiles", "/demo/health-score", "/demo/tax", "/demo/goals"],
+            "demo": ["/demo/profiles", "/demo/health-score", "/demo/tax", "/demo/goals", "/demo/couple", "/demo/portfolio"],
             "chat": ["/chat"],
         },
     }
@@ -347,23 +436,46 @@ def demo_profiles():
 
 
 @app.get("/demo/health-score")
-def demo_health_score(profile: str = "young_professional"):
+def demo_health_score(profile: str = "young_professional", include_demo_portfolio: bool = False):
     """Run health score on a demo profile."""
     if profile not in DEMO_PROFILES:
         raise HTTPException(status_code=400, detail=f"Unknown profile: {profile}")
     p = DEMO_PROFILES[profile]["profile"]()
-    report = compute_money_health_score(p)
+    if not isinstance(p, IndividualProfile):
+        raise HTTPException(
+            status_code=400,
+            detail="This demo profile is not an individual profile. Use /demo/couple for household demos.",
+        )
+    portfolio = get_demo_portfolio() if include_demo_portfolio else None
+    report = compute_money_health_score(p, portfolio)
     return {"profile": DEMO_PROFILES[profile]["name"], "report": report.to_dict()}
 
 
 @app.get("/demo/tax")
-def demo_tax(profile: str = "mid_career"):
+def demo_tax(
+    profile: str = "mid_career",
+    risk_profile: str = "moderate",
+    liquidity_need: str = "medium",
+):
     """Run tax comparison on a demo profile."""
     if profile not in DEMO_PROFILES:
         raise HTTPException(status_code=400, detail=f"Unknown profile: {profile}")
     p = DEMO_PROFILES[profile]["profile"]()
+    if not isinstance(p, IndividualProfile):
+        raise HTTPException(
+            status_code=400,
+            detail="This demo profile is not an individual profile. Use /demo/couple for household demos.",
+        )
     comp = compare_regimes(p)
-    return {"profile": DEMO_PROFILES[profile]["name"], "comparison": comp.to_dict()}
+    return {
+        "profile": DEMO_PROFILES[profile]["name"],
+        "comparison": comp.to_dict(),
+        "tax_saving_recommendations": recommend_tax_saving_options(
+            p,
+            risk_profile=risk_profile,
+            liquidity_need=liquidity_need,
+        ),
+    }
 
 
 @app.get("/demo/goals")
@@ -377,11 +489,22 @@ def demo_goals():
 # --- Tax Endpoints ---
 
 @app.post("/tax/compare")
-def tax_compare(profile: ProfileInput):
+def tax_compare(
+    profile: ProfileInput,
+    risk_profile: str = Query("moderate"),
+    liquidity_need: str = Query("medium"),
+):
     """Compare old vs new regime and recommend best option."""
     p = _build_profile(profile)
     result = compare_regimes(p)
-    return result.to_dict()
+    return {
+        **result.to_dict(),
+        "tax_saving_recommendations": recommend_tax_saving_options(
+            p,
+            risk_profile=risk_profile,
+            liquidity_need=liquidity_need,
+        ),
+    }
 
 
 @app.post("/tax/old-regime")
@@ -405,6 +528,8 @@ async def tax_form16_analyze(
     file: UploadFile = File(...),
     city: str = Form("metro"),
     other_income: float = Form(0),
+    risk_profile: str = Form("moderate"),
+    liquidity_need: str = Form("medium"),
 ):
     """Parse a Form-16 PDF and run tax comparison on extracted values."""
     if not file.filename or not file.filename.lower().endswith(".pdf"):
@@ -428,6 +553,11 @@ async def tax_form16_analyze(
             "normalized_salary": profile.salary.__dict__,
             "normalized_deductions": profile.deductions.__dict__,
             "comparison": comparison.to_dict(),
+            "tax_saving_recommendations": recommend_tax_saving_options(
+                profile,
+                risk_profile=risk_profile,
+                liquidity_need=liquidity_need,
+            ),
         }
     except ImportError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -451,24 +581,21 @@ def health_score(profile: ProfileInput):
     return report.to_dict()
 
 
+@app.post("/health-score/with-portfolio")
+def health_score_with_portfolio(data: HealthScoreInput):
+    """Compute Money Health Score using both profile and portfolio data."""
+    profile = _build_profile(data.profile)
+    portfolio = parse_cas_from_dict(data.portfolio) if data.portfolio else None
+    report = compute_money_health_score(profile, portfolio)
+    return report.to_dict()
+
+
 # --- Goal Planning ---
 
 @app.post("/goals/plan")
 def plan_goals(goals: list[GoalInput]):
     """Plan all financial goals with SIP requirements."""
-    goal_list = []
-    for g in goals:
-        goal_list.append(FinancialGoal(
-            name=g.name,
-            goal_type=GoalType(g.goal_type) if g.goal_type in GoalType.__members__.values() else GoalType.CUSTOM,
-            target_amount=g.target_amount,
-            target_year=g.target_year,
-            current_corpus=g.current_corpus,
-            monthly_sip=g.monthly_sip,
-            inflation_rate=g.inflation_rate,
-            expected_return=g.expected_return,
-            priority=GoalPriority(g.priority) if g.priority in GoalPriority.__members__.values() else GoalPriority.MEDIUM,
-        ))
+    goal_list = _build_goals(goals)
     plans = plan_all_goals(goal_list)
     return [p.to_dict() for p in plans]
 
@@ -488,23 +615,29 @@ def fire_calculator(data: FIREInput):
     return result.to_dict()
 
 
+@app.post("/fire/master-plan")
+def fire_master_plan(data: FireMasterPlanInput):
+    """Build a unified FIRE roadmap across goals, tax, insurance, and emergency fund."""
+    profile = _build_profile(data.profile)
+    goals = _build_goals(data.goals)
+    portfolio = parse_cas_from_dict(data.portfolio) if data.portfolio else None
+    return build_fire_master_plan(
+        profile,
+        goals,
+        portfolio,
+        expected_return=data.expected_return,
+        inflation_rate=data.inflation_rate,
+        safe_withdrawal_rate=data.safe_withdrawal_rate,
+        annual_income_growth=data.annual_income_growth,
+        annual_expense_inflation=data.annual_expense_inflation,
+        horizon_months=data.horizon_months,
+    )
+
+
 @app.post("/goals/allocate")
 def allocate_sips(goals: list[GoalInput], total_sip: float = Query(...)):
     """Allocate available SIP budget across goals by priority."""
-    goal_list = [
-        FinancialGoal(
-            name=g.name,
-            goal_type=GoalType.CUSTOM,
-            target_amount=g.target_amount,
-            target_year=g.target_year,
-            current_corpus=g.current_corpus,
-            monthly_sip=g.monthly_sip,
-            inflation_rate=g.inflation_rate,
-            expected_return=g.expected_return,
-            priority=GoalPriority(g.priority) if g.priority in GoalPriority.__members__.values() else GoalPriority.MEDIUM,
-        )
-        for g in goals
-    ]
+    goal_list = _build_goals(goals)
     return allocate_sip_across_goals(goal_list, total_sip)
 
 
@@ -549,6 +682,41 @@ def simulate_life_events(profile: ProfileInput, events: list[LifeEventInput], ye
     ]
     result = compare_scenarios(p, event_list, years=years)
     return result.to_dict()
+
+
+@app.post("/simulate/advisor")
+def simulate_life_event_advisor(
+    profile: ProfileInput,
+    events: list[LifeEventInput],
+    years: int = 10,
+    goals: list[GoalInput] = [],
+    include_demo_portfolio: bool = False,
+):
+    """Run life-event analysis across cash flow, tax, goals, insurance, and portfolio."""
+    p = _build_profile(profile)
+    event_list = [
+        LifeEvent(
+            event_type=LifeEventType(e.event_type) if e.event_type in [t.value for t in LifeEventType] else LifeEventType.SALARY_HIKE,
+            name=e.name,
+            year=e.year,
+            month=e.month,
+            one_time_cost=e.one_time_cost,
+            monthly_income_change=e.monthly_income_change,
+            monthly_expense_change=e.monthly_expense_change,
+            duration_months=e.duration_months,
+            new_emi=e.new_emi,
+        )
+        for e in events
+    ]
+    goal_list = _build_goals(goals)
+    portfolio = get_demo_portfolio() if include_demo_portfolio else None
+    return analyze_life_event_advisor(
+        p,
+        event_list,
+        goals=goal_list,
+        portfolio=portfolio,
+        years=years,
+    )
 
 
 # --- EMI & Loan Endpoints ---
@@ -725,6 +893,121 @@ def report_full(profile: ProfileInput, goals: list[GoalInput] = []):
         media_type="application/pdf",
         headers={"Content-Disposition": "attachment; filename=financial_report.pdf"},
     )
+
+
+# --- Couple Planner ---
+
+@app.post("/tax/couple")
+def couple_tax_optimize(data: CoupleInput):
+    """Optimize tax across a couple — compare regimes for both partners and suggest deduction allocation."""
+    pa = _build_profile(data.person_a)
+    pb = _build_profile(data.person_b)
+    household = HouseholdProfile(
+        person_a=pa,
+        person_b=pb,
+        shared_monthly_expenses=MonthlyExpenses(misc=data.shared_monthly_misc),
+        num_dependents=data.num_dependents,
+    )
+    return optimize_couple_tax(
+        household,
+        shared_annual_rent=data.shared_annual_rent,
+        target_monthly_sip=data.target_monthly_sip,
+    )
+
+
+@app.get("/demo/couple")
+def demo_couple():
+    """Run couple tax optimization on demo couple profile."""
+    household = get_demo_couple()
+    result = optimize_couple_tax(
+        household,
+        shared_annual_rent=max(household.shared_monthly_expenses.rent * 12, 360_000),
+    )
+    result["person_a_name"] = household.person_a.name
+    result["person_b_name"] = household.person_b.name
+    result["combined_annual_income"] = round(household.combined_annual_income)
+    return result
+
+
+# --- Portfolio X-Ray ---
+
+@app.post("/portfolio/upload")
+async def portfolio_upload(
+    file: UploadFile = File(...),
+    password: str = Form(""),
+    session_id: str = Form(""),
+):
+    """Upload a CAS PDF and get parsed portfolio with X-Ray analysis."""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Please upload a CAS PDF file.")
+
+    suffix = os.path.splitext(file.filename)[1] or ".pdf"
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(await file.read())
+            temp_path = tmp.name
+
+        portfolio = parse_cas_pdf(temp_path, password=password)
+        returns = compute_portfolio_returns(portfolio)
+        overlap = analyze_fund_overlap(portfolio)
+        expenses = analyze_expense_ratios(portfolio)
+        benchmark = analyze_benchmark_comparison(portfolio, prefer_live=True)
+        behavioral = generate_behavioral_summary(run_full_behavioral_analysis(portfolio))
+        rebalance = generate_rebalance_plan(portfolio, age=28)
+
+        attached = ""
+        if session_id:
+            _attach_portfolio_to_session(session_id, portfolio)
+            attached = session_id
+
+        return {
+            "investor_name": portfolio.investor_name,
+            "num_funds": portfolio.num_funds,
+            "returns": returns,
+            "overlap": overlap.to_dict(),
+            "expenses": expenses.to_dict(),
+            "benchmark": benchmark.to_dict(),
+            "behavioral": behavioral,
+            "rebalance": rebalance.to_dict(),
+            "attached_session_id": attached or None,
+        }
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        try:
+            if "temp_path" in locals():
+                os.unlink(temp_path)
+        except OSError:
+            pass
+
+
+@app.get("/demo/portfolio")
+def demo_portfolio_xray(session_id: Optional[str] = None):
+    """Run full X-Ray on the demo portfolio."""
+    portfolio = get_demo_portfolio()
+    returns = compute_portfolio_returns(portfolio)
+    overlap = analyze_fund_overlap(portfolio)
+    expenses = analyze_expense_ratios(portfolio)
+    benchmark = analyze_benchmark_comparison(portfolio, prefer_live=True)
+    behavioral = generate_behavioral_summary(run_full_behavioral_analysis(portfolio))
+    rebalance = generate_rebalance_plan(portfolio, age=28)
+
+    if session_id:
+        _attach_portfolio_to_session(session_id, portfolio)
+
+    return {
+        "investor_name": portfolio.investor_name,
+        "num_funds": portfolio.num_funds,
+        "returns": returns,
+        "overlap": overlap.to_dict(),
+        "expenses": expenses.to_dict(),
+        "benchmark": benchmark.to_dict(),
+        "behavioral": behavioral,
+        "rebalance": rebalance.to_dict(),
+        "attached_session_id": session_id,
+    }
 
 
 # --- AI Chat ---

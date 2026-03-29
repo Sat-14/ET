@@ -297,6 +297,35 @@ TOOLS = [
             "required": [],
         },
     },
+    # --- Portfolio X-Ray Tools ---
+    {
+        "name": "analyze_portfolio_xray",
+        "description": (
+            "Run a full Portfolio X-Ray on the user's loaded mutual fund portfolio. "
+            "Returns XIRR (per-fund and overall), fund overlap analysis, expense ratio drag, "
+            "category allocation, and regular-to-direct savings potential. "
+            "Requires a portfolio to be loaded (CAS upload or demo)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "detect_behavioral_patterns",
+        "description": (
+            "Detect behavioral biases in the user's loaded mutual fund portfolio based on "
+            "transaction history. Detects: SIP Panic Stop, Buy High Sell Low, Theme Chasing, "
+            "Excessive Switching, Recency Bias, Disposition Effect. "
+            "Research-backed (Chadha 2024, ACR Journal). Requires a portfolio to be loaded."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
 ]
 
 
@@ -348,7 +377,7 @@ def tools_to_anthropic_format(tools: list[dict]) -> list[dict]:
 
 AGENT_TOOLS = {
     "tax_agent": ["compare_tax_regimes", "calculate_emi"],
-    "portfolio_agent": ["search_mutual_funds", "get_fund_details"],
+    "portfolio_agent": ["search_mutual_funds", "get_fund_details", "analyze_portfolio_xray", "detect_behavioral_patterns"],
     "goal_agent": ["calculate_fire", "calculate_required_corpus", "calculate_swp", "calculate_emi", "suggest_asset_allocation"],
     "health_agent": ["compute_health_score", "compare_tax_regimes"],
     "life_event_agent": ["calculate_emi", "calculate_swp", "calculate_required_corpus"],

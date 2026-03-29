@@ -6,9 +6,22 @@ and computing impact on Money Health Score dimensions.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from datetime import datetime
 
+from src.engines.goal_calculator import allocate_sip_across_goals, plan_all_goals
+from src.engines.insurance_calculator import (
+    calculate_health_insurance_need,
+    calculate_life_insurance_need,
+)
+from src.engines.rebalancer import generate_rebalance_plan
+from src.engines.tax_calculator import compare_regimes
+from src.engines.xirr_calculator import (
+    analyze_benchmark_comparison,
+    compute_portfolio_returns,
+)
+from src.models.portfolio import Portfolio
 from src.models.user import IndividualProfile
 from src.models.goals import LifeEvent
 
@@ -301,3 +314,217 @@ def compare_scenarios(
         with_events=with_events.summary,
         deltas=deltas,
     )
+
+
+def _best_monthly_in_hand(profile: IndividualProfile) -> float:
+    comparison = compare_regimes(profile)
+    if comparison.recommended_regime.value == "old":
+        return comparison.old_regime.monthly_in_hand
+    return comparison.new_regime.monthly_in_hand
+
+
+def _monthly_surplus(profile: IndividualProfile) -> float:
+    return max(
+        _best_monthly_in_hand(profile)
+        - profile.monthly_expenses.total
+        - profile.debt.total_monthly_emi,
+        0.0,
+    )
+
+
+def _build_event_adjusted_profile(
+    profile: IndividualProfile,
+    events: list[LifeEvent],
+) -> tuple[IndividualProfile, float]:
+    adjusted = copy.deepcopy(profile)
+    lump_sum_inflow = 0.0
+
+    for event in events:
+        active_months = 12 if event.duration_months == 0 else min(event.duration_months, 12)
+
+        if event.duration_months == 0:
+            adjusted.salary.special_allowance += event.monthly_income_change * 12
+            adjusted.monthly_expenses.misc = max(
+                adjusted.monthly_expenses.misc + event.monthly_expense_change,
+                0.0,
+            )
+            adjusted.debt.other_loan_emi += event.new_emi
+        else:
+            adjusted.other_income += event.monthly_income_change * active_months
+            adjusted.monthly_expenses.misc = max(
+                adjusted.monthly_expenses.misc + (event.monthly_expense_change * active_months / 12),
+                0.0,
+            )
+            adjusted.debt.other_loan_emi += event.new_emi * active_months / 12
+
+        if event.one_time_cost > 0:
+            if adjusted.emergency_fund >= event.one_time_cost:
+                adjusted.emergency_fund -= event.one_time_cost
+            else:
+                shortfall = event.one_time_cost - adjusted.emergency_fund
+                adjusted.emergency_fund = 0.0
+                adjusted.current_investments = max(adjusted.current_investments - shortfall, 0.0)
+        elif event.one_time_cost < 0:
+            inflow = abs(event.one_time_cost)
+            lump_sum_inflow += inflow
+            emergency_target = (
+                adjusted.monthly_expenses.total + adjusted.debt.total_monthly_emi
+            ) * 6
+            ef_gap = max(emergency_target - adjusted.emergency_fund, 0.0)
+            ef_add = min(ef_gap, inflow)
+            adjusted.emergency_fund += ef_add
+            adjusted.current_investments += inflow - ef_add
+
+    return adjusted, lump_sum_inflow
+
+
+def analyze_life_event_advisor(
+    profile: IndividualProfile,
+    events: list[LifeEvent],
+    *,
+    goals: list | None = None,
+    portfolio: Portfolio | None = None,
+    years: int = 10,
+) -> dict:
+    """Build integrated life-event advice across tax, goals, insurance, and portfolio."""
+    goals = goals or []
+    scenario = compare_scenarios(profile, events, years=years)
+    adjusted_profile, lump_sum_inflow = _build_event_adjusted_profile(profile, events)
+
+    baseline_tax = compare_regimes(profile)
+    adjusted_tax = compare_regimes(adjusted_profile)
+    baseline_best_tax = min(
+        baseline_tax.old_regime.total_tax,
+        baseline_tax.new_regime.total_tax,
+    )
+    adjusted_best_tax = min(
+        adjusted_tax.old_regime.total_tax,
+        adjusted_tax.new_regime.total_tax,
+    )
+
+    baseline_surplus = _monthly_surplus(profile)
+    adjusted_surplus = _monthly_surplus(adjusted_profile)
+    recommended_sip = max(round(adjusted_surplus * 0.8), 0)
+
+    baseline_goal_plans = plan_all_goals(goals) if goals else []
+    adjusted_goal_alloc = allocate_sip_across_goals(goals, recommended_sip) if goals else {}
+    adjusted_goals = []
+    if goals:
+        for goal in goals:
+            cloned_goal = copy.deepcopy(goal)
+            cloned_goal.monthly_sip = adjusted_goal_alloc.get(goal.name, 0.0)
+            adjusted_goals.append(cloned_goal)
+    adjusted_goal_plans = plan_all_goals(adjusted_goals) if adjusted_goals else []
+
+    goal_impacts = []
+    for baseline_plan in baseline_goal_plans:
+        updated_plan = next(
+            (plan for plan in adjusted_goal_plans if plan.goal.name == baseline_plan.goal.name),
+            None,
+        )
+        if updated_plan is None:
+            continue
+        goal_impacts.append({
+            "goal_name": baseline_plan.goal.name,
+            "baseline_required_sip": round(baseline_plan.required_monthly_sip),
+            "post_event_planned_sip": round(updated_plan.goal.monthly_sip),
+            "baseline_on_track": baseline_plan.on_track,
+            "post_event_on_track": updated_plan.on_track,
+            "required_sip_delta": round(
+                updated_plan.required_monthly_sip - baseline_plan.required_monthly_sip
+            ),
+        })
+
+    baseline_life = calculate_life_insurance_need(profile)
+    adjusted_life = calculate_life_insurance_need(adjusted_profile)
+    explicit_insurance_delta = sum(max(event.insurance_need_change, 0.0) for event in events)
+    baseline_health = calculate_health_insurance_need(profile)
+    adjusted_health = calculate_health_insurance_need(adjusted_profile)
+
+    portfolio_effects = {
+        "loaded": portfolio is not None,
+        "note": "No portfolio loaded for event-aware portfolio advice.",
+    }
+    if portfolio is not None:
+        returns = compute_portfolio_returns(portfolio)
+        benchmark = analyze_benchmark_comparison(portfolio, prefer_live=True)
+        rebalance = generate_rebalance_plan(portfolio, age=adjusted_profile.age)
+
+        deployment_note = "Keep long-term SIPs aligned to your target allocation."
+        if scenario.deltas["emergency_fund_stress"] < 0 or adjusted_surplus < baseline_surplus:
+            deployment_note = (
+                "Route new money to liquid or short-duration debt until the emergency buffer is restored."
+            )
+        elif lump_sum_inflow > 0 and rebalance.actions:
+            deployment_note = rebalance.actions[0].suggestion
+        elif lump_sum_inflow > 0:
+            deployment_note = (
+                "Deploy the lump sum in stages using the current equity-debt-gold target mix."
+            )
+
+        portfolio_effects = {
+            "loaded": True,
+            "returns": returns,
+            "benchmark": benchmark.to_dict(),
+            "rebalance": rebalance.to_dict(),
+            "recommended_deployment": deployment_note,
+        }
+
+    actions = []
+    if adjusted_best_tax != baseline_best_tax:
+        if adjusted_best_tax < baseline_best_tax:
+            actions.append(
+                f"Re-run tax planning after the event. Best-case annual tax changes by Rs {round(abs(adjusted_best_tax - baseline_best_tax)):,}."
+            )
+        else:
+            actions.append(
+                f"The event increases annual tax by about Rs {round(adjusted_best_tax - baseline_best_tax):,}. Adjust deductions or NPS accordingly."
+            )
+    if adjusted_surplus < baseline_surplus:
+        actions.append(
+            f"Reduce discretionary spending or temporary SIPs. Monthly surplus falls from Rs {round(baseline_surplus):,} to Rs {round(adjusted_surplus):,}."
+        )
+    if recommended_sip <= 0:
+        actions.append("Pause wealth SIPs temporarily and rebuild liquidity before resuming aggressive investing.")
+    elif goals and any(not item["post_event_on_track"] for item in goal_impacts):
+        actions.append("Reallocate SIPs across goals immediately because at least one goal falls off track after the event.")
+    if adjusted_life.gap + explicit_insurance_delta > baseline_life.gap:
+        actions.append(
+            f"Increase life cover by roughly Rs {round((adjusted_life.gap + explicit_insurance_delta) - baseline_life.gap):,} after this event."
+        )
+    if adjusted_health.gap > baseline_health.gap:
+        actions.append("Upgrade health insurance or add a super top-up before absorbing the new household risk.")
+    if portfolio is not None:
+        actions.append(portfolio_effects["recommended_deployment"])
+
+    return {
+        "scenario": scenario.to_dict(),
+        "cashflow": {
+            "baseline_monthly_surplus": round(baseline_surplus),
+            "post_event_monthly_surplus": round(adjusted_surplus),
+            "recommended_monthly_sip_after_event": recommended_sip,
+            "lump_sum_inflow": round(lump_sum_inflow),
+        },
+        "tax_impact": {
+            "baseline_best_tax": round(baseline_best_tax),
+            "post_event_best_tax": round(adjusted_best_tax),
+            "annual_tax_delta": round(adjusted_best_tax - baseline_best_tax),
+            "baseline_recommended_regime": baseline_tax.recommended_regime.value,
+            "post_event_recommended_regime": adjusted_tax.recommended_regime.value,
+        },
+        "goal_impact": {
+            "goal_count": len(goals),
+            "recommended_goal_sip_split": {
+                key: round(value) for key, value in adjusted_goal_alloc.items()
+            },
+            "goal_impacts": goal_impacts,
+        },
+        "insurance_impact": {
+            "baseline_life_cover_gap": round(baseline_life.gap),
+            "post_event_life_cover_gap": round(adjusted_life.gap + explicit_insurance_delta),
+            "baseline_health_cover_gap": round(baseline_health.gap),
+            "post_event_health_cover_gap": round(adjusted_health.gap),
+        },
+        "portfolio_effects": portfolio_effects,
+        "recommended_actions": actions[:6],
+    }

@@ -19,12 +19,22 @@ from src.engines.investment_screener import (
     suggest_asset_allocation as _suggest_alloc,
     screen_stocks as _screen_stocks,
 )
+from src.engines.xirr_calculator import (
+    compute_portfolio_returns,
+    analyze_fund_overlap,
+    analyze_expense_ratios,
+)
+from src.engines.behavioral_detector import (
+    run_full_behavioral_analysis,
+    generate_behavioral_summary,
+)
 
 
 def execute_tool(
     tool_name: str,
     arguments: dict,
     user_profile=None,
+    user_portfolio=None,
 ) -> str:
     """Execute a tool call and return JSON string result.
 
@@ -32,6 +42,7 @@ def execute_tool(
         tool_name: Name of the tool from LLM's function call.
         arguments: Dict of arguments (may have string values from LLM).
         user_profile: IndividualProfile object for profile-dependent tools.
+        user_portfolio: Portfolio object for portfolio-dependent tools.
 
     Returns:
         JSON string of the result.
@@ -137,6 +148,29 @@ def execute_tool(
                 limit=int(float(arguments.get("limit", 10))),
             )
             return json.dumps(result, default=str)
+
+        elif tool_name == "analyze_portfolio_xray":
+            if user_portfolio is None:
+                return json.dumps({
+                    "error": "No portfolio loaded. Please upload a CAS PDF or load the demo portfolio first."
+                })
+            returns = compute_portfolio_returns(user_portfolio)
+            overlap = analyze_fund_overlap(user_portfolio)
+            expenses = analyze_expense_ratios(user_portfolio)
+            return json.dumps({
+                "returns": returns,
+                "overlap": overlap.to_dict(),
+                "expenses": expenses.to_dict(),
+            }, default=str)
+
+        elif tool_name == "detect_behavioral_patterns":
+            if user_portfolio is None:
+                return json.dumps({
+                    "error": "No portfolio loaded. Please upload a CAS PDF or load the demo portfolio first."
+                })
+            patterns = run_full_behavioral_analysis(user_portfolio)
+            summary = generate_behavioral_summary(patterns)
+            return json.dumps(summary, default=str)
 
         else:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})

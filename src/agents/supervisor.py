@@ -140,6 +140,7 @@ async def _call_gemini(
     system_prompt: str,
     tools: Optional[list[dict]] = None,
     user_profile=None,
+    user_portfolio=None,
 ) -> str:
     """Google Gemini 2.5 Flash - FREE, no credit card required.
 
@@ -190,7 +191,12 @@ async def _call_gemini(
 
                 # Execute the tool
                 args = dict(fn_call.args) if fn_call.args else {}
-                result_json = execute_tool(fn_call.name, args, user_profile)
+                result_json = execute_tool(
+                    fn_call.name,
+                    args,
+                    user_profile=user_profile,
+                    user_portfolio=user_portfolio,
+                )
 
                 # Parse result for Gemini (needs a dict, not a string)
                 try:
@@ -225,6 +231,7 @@ async def _call_groq(
     system_prompt: str,
     tools: Optional[list[dict]] = None,
     user_profile=None,
+    user_portfolio=None,
 ) -> str:
     """Groq + Llama 3.3 70B - FREE, no credit card, 750+ tok/sec.
 
@@ -282,7 +289,12 @@ async def _call_groq(
                 # Execute each tool and add results
                 for tc in choice.message.tool_calls:
                     args = json.loads(tc.function.arguments)
-                    result = execute_tool(tc.function.name, args, user_profile)
+                    result = execute_tool(
+                        tc.function.name,
+                        args,
+                        user_profile=user_profile,
+                        user_portfolio=user_portfolio,
+                    )
                     groq_messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -309,6 +321,7 @@ async def _call_deepseek(
     system_prompt: str,
     tools: Optional[list[dict]] = None,
     user_profile=None,
+    user_portfolio=None,
 ) -> str:
     """DeepSeek R1/V3 - 10M free tokens, excellent math/reasoning.
 
@@ -369,7 +382,12 @@ async def _call_deepseek(
                 # Execute each tool and add results
                 for tc in choice.message.tool_calls:
                     args = json.loads(tc.function.arguments)
-                    result = execute_tool(tc.function.name, args, user_profile)
+                    result = execute_tool(
+                        tc.function.name,
+                        args,
+                        user_profile=user_profile,
+                        user_portfolio=user_portfolio,
+                    )
                     ds_messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -396,6 +414,7 @@ async def _call_anthropic(
     system_prompt: str,
     tools: Optional[list[dict]] = None,
     user_profile=None,
+    user_portfolio=None,
 ) -> str:
     """Anthropic Claude - paid, best quality.
 
@@ -444,7 +463,12 @@ async def _call_anthropic(
                             "name": block.name,
                             "input": block.input,
                         })
-                        result = execute_tool(block.name, block.input, user_profile)
+                        result = execute_tool(
+                            block.name,
+                            block.input,
+                            user_profile=user_profile,
+                            user_portfolio=user_portfolio,
+                        )
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
@@ -524,6 +548,7 @@ async def get_llm_response(
     provider: Optional[str] = None,
     tools: Optional[list[dict]] = None,
     user_profile=None,
+    user_portfolio=None,
 ) -> str:
     """Get response from configured LLM provider with tool calling.
 
@@ -540,7 +565,11 @@ async def get_llm_response(
     # If explicit provider set, use it directly
     if provider and provider in LLM_PROVIDERS:
         return await LLM_PROVIDERS[provider](
-            messages, system_prompt, tools=tools, user_profile=user_profile,
+            messages,
+            system_prompt,
+            tools=tools,
+            user_profile=user_profile,
+            user_portfolio=user_portfolio,
         )
 
     # Auto-detect: try providers based on which keys are available
@@ -554,7 +583,11 @@ async def get_llm_response(
     for key_name, prov in key_to_provider.items():
         if os.environ.get(key_name):
             return await LLM_PROVIDERS[prov](
-                messages, system_prompt, tools=tools, user_profile=user_profile,
+                messages,
+                system_prompt,
+                tools=tools,
+                user_profile=user_profile,
+                user_portfolio=user_portfolio,
             )
 
     # No keys found at all
@@ -569,6 +602,7 @@ class MoneyMentorSupervisor:
         self.engine_results: dict = {}
         self.provider = provider  # Override LLM provider
         self._user_profile_object = None  # IndividualProfile for tool execution
+        self._user_portfolio_object = None  # Portfolio for tool execution
 
     def set_user_profile(self, profile_dict: dict):
         """Set user profile data for context."""
@@ -582,7 +616,11 @@ class MoneyMentorSupervisor:
         """
         self._user_profile_object = profile
 
-    def set_portfolio_data(self, portfolio_dict: dict):
+    def set_portfolio_object(self, portfolio):
+        """Set Portfolio object for tool execution."""
+        self._user_portfolio_object = portfolio
+
+    def set_portfolio_data(self, portfolio_dict: Optional[dict]):
         """Set portfolio data for context."""
         self.state.portfolio_data = portfolio_dict
 
@@ -636,6 +674,7 @@ class MoneyMentorSupervisor:
             provider=self.provider,
             tools=agent_tools,
             user_profile=self._user_profile_object,
+            user_portfolio=self._user_portfolio_object,
         )
 
         self.state.add_message("assistant", response)
@@ -650,3 +689,4 @@ class MoneyMentorSupervisor:
         self.state = ConversationState()
         self.engine_results = {}
         self._user_profile_object = None
+        self._user_portfolio_object = None

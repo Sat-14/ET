@@ -35,8 +35,11 @@ class FinancialReport(FPDF):
         self.set_y(-15)
         self.set_font("Helvetica", "I", 7)
         self.set_text_color(150, 150, 150)
-        self.cell(0, 10, "For educational purposes only. Consult a SEBI-registered advisor.", align="C")
-        self.cell(0, 10, f"Page {self.page_no()}/{{nb}}", align="R", new_x="LMARGIN", new_y="NEXT")
+        self.cell(
+            0, 10,
+            f"For educational purposes only. Consult a SEBI-registered advisor.  |  Page {self.page_no()}/{{nb}}",
+            align="C", new_x="LMARGIN", new_y="NEXT",
+        )
 
     def section_title(self, title: str):
         self.set_font("Helvetica", "B", 13)
@@ -76,17 +79,20 @@ class FinancialReport(FPDF):
         self.set_text_color(55, 55, 55)
         self.cell(55, 7, label)
 
+        # Capture position after label cell
+        bar_x = self.get_x()
+        bar_y = self.get_y()
+
         # Background bar
-        x, y = self.get_x(), self.get_y()
         self.set_fill_color(230, 230, 230)
-        self.rect(x, y + 1, 80, 5, "F")
+        self.rect(bar_x, bar_y + 1, 80, 5, "F")
 
         # Filled bar
         self.set_fill_color(*color)
-        self.rect(x, y + 1, max(80 * pct / 100, 1), 5, "F")
+        self.rect(bar_x, bar_y + 1, max(80 * pct / 100, 1), 5, "F")
 
-        # Score text
-        self.set_x(x + 85)
+        # Score text — reset both X and Y explicitly to avoid cursor conflict
+        self.set_xy(bar_x + 85, bar_y)
         self.set_font("Helvetica", "B", 9)
         self.cell(0, 7, f"{score:.0f}/{max_score:.0f} ({pct:.0f}%)", new_x="LMARGIN", new_y="NEXT")
 
