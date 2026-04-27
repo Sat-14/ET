@@ -10,15 +10,15 @@ openai>=1.50.0
 anthropic>=0.39.0
 
 # Financial Engines
-pyxirr>=0.10.0
+pyxirr>=0.10.8
 numpy-financial>=1.0.0
-mftool>=3.0
+mftool>=3.2
 
 # Market Data
 yfinance>=0.2.40
 
 # PDF & Document Parsing
-casparser>=0.7.0
+casparser>=0.8.1
 pdfplumber>=0.10.0
 python-multipart>=0.0.9
 fpdf2>=2.7.9
