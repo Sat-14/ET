@@ -4,10 +4,10 @@ uvicorn[standard]==0.30.0
 pydantic==2.9.0
 
 # LLM Providers (all four installed — app auto-selects based on .env key)
-google-generativeai>=0.8.0
-groq>=0.11.0
-openai>=1.50.0
-anthropic>=0.39.0
+google-generativeai>=0.8.6
+groq>=1.2.0
+openai>=2.32.0
+anthropic>=0.97.0
 
 # Financial Engines
 pyxirr>=0.10.0
